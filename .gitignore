@@ -1,0 +1,23 @@
+.DS_Store
+.AppleDouble
+.LSOverride
+
+.vscode/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Raw data and generated outputs are too large for normal GitHub commits.
+input/
+中间结果/
+docs/
+描述性统计图/
+
+*.log
+*.pdf
+*.zip
+*.7z
+*.xlsx
+*.xls
+*.csv
+*.dta
