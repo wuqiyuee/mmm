@@ -7,7 +7,9 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 import tempfile
 import unittest
+import warnings
 
+import numpy as np
 import pandas as pd
 
 import 表5_心理机制 as table5
@@ -317,6 +319,218 @@ class Table5MechanismTests(unittest.TestCase):
         self.assertEqual(materialized[pairs[1].first_col].tolist(), [0, 1])
         self.assertEqual(materialized[pairs[1].second_col].tolist(), [1, 0])
         self.assertFalse(any("rest" in column for column in materialized.columns))
+
+
+class Table5RegressionTests(unittest.TestCase):
+    """保护表5核心估计器的固定效应和推断口径。"""
+
+    @staticmethod
+    def _build_panel() -> pd.DataFrame:
+        """生成有充分组内变异、聚类数和固定效应组的可重复虚构面板。"""
+        rng = np.random.default_rng(20260727)
+        firms = [f"{firm:06d}" for firm in range(1, 13)]
+        dates = pd.date_range("2020-01-02", periods=48, freq="7D")
+        panel = pd.MultiIndex.from_product(
+            [firms, dates],
+            names=["StkcdRecall", "Trddt"],
+        ).to_frame(index=False)
+        row_count = len(panel)
+        panel["yearQuarter"] = panel["Trddt"].dt.to_period("Q").astype(str)
+
+        baseline_90 = rng.binomial(1, 0.62, row_count)
+        baseline_5090 = rng.binomial(1, 0.58, row_count)
+        strong_90 = baseline_90 * rng.binomial(1, 0.44, row_count)
+        strong_5090 = baseline_5090 * rng.binomial(1, 0.39, row_count)
+        panel["quarterLag1size90plus"] = baseline_90
+        panel["quarterLag1size50_90"] = baseline_5090
+        panel["lag1hiavolsize90plus"] = strong_90
+        panel["lag1hiavolsize50_90"] = strong_5090
+        panel["control_a"] = rng.normal(size=row_count)
+        panel["control_b"] = rng.normal(size=row_count)
+
+        rest_90 = ((baseline_90 == 1) & (strong_90 == 0)).astype(float)
+        rest_5090 = (
+            (baseline_5090 == 1) & (strong_5090 == 0)
+        ).astype(float)
+        fe_keys = (
+            panel["StkcdRecall"].astype(str)
+            + "_"
+            + panel["yearQuarter"].astype(str)
+        )
+        fe_effects = {
+            key: value
+            for key, value in zip(
+                fe_keys.unique(),
+                rng.normal(scale=0.025, size=fe_keys.nunique()),
+                strict=True,
+            )
+        }
+        panel["chAdjreturn_t_tp1_Recall_w"] = (
+            0.045 * strong_90
+            + 0.010 * rest_90
+            - 0.025 * strong_5090
+            + 0.030 * rest_5090
+            + 0.008 * panel["control_a"]
+            - 0.005 * panel["control_b"]
+            + fe_keys.map(fe_effects).astype(float)
+            + rng.normal(scale=0.025, size=row_count)
+        )
+        return panel
+
+    def test_drop_fe_singletons_iterates_until_no_new_singletons(self):
+        """若只删除首轮单例，两组固定效应之间新产生的单例会残留。"""
+        reg = pd.DataFrame(
+            {
+                "_fe_left": [0, 0, 1, 1, 2, 2],
+                "_fe_right": [0, 1, 1, 2, 3, 3],
+                "value": [10, 11, 12, 13, 20, 21],
+            },
+            index=[101, 103, 107, 109, 113, 127],
+        )
+
+        cleaned, removed = table5.drop_fe_singletons_iteratively(
+            reg,
+            ["_fe_left", "_fe_right"],
+        )
+
+        self.assertEqual(cleaned.index.tolist(), [113, 127])
+        self.assertEqual(cleaned["value"].tolist(), [20, 21])
+        self.assertEqual(removed, 4)
+
+    def test_run_mechanism_regression_returns_two_wald_rows_and_four_coefficients(self):
+        """若四个核心变量未同模估计或推断口径错，主结果与明细契约会失真。"""
+        panel = self._build_panel()
+        outcome = table5.OUTCOME_SPECS[0]
+        spec = table5.build_mechanism_specs(1)[0]
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            main_rows, coefficient_rows = table5.run_mechanism_regression(
+                panel,
+                outcome,
+                spec,
+                ["control_a", "control_b"],
+            )
+
+        self.assertEqual(len(main_rows), 2)
+        self.assertEqual(len(coefficient_rows), 4)
+        self.assertEqual(
+            [row["规模组"] for row in main_rows],
+            ["90plus", "50_90"],
+        )
+        self.assertEqual(
+            {row["变量"] for row in coefficient_rows},
+            {
+                "table5_high_total_volume_90plus_strong",
+                "table5_high_total_volume_90plus_rest",
+                "table5_high_total_volume_50_90_strong",
+                "table5_high_total_volume_50_90_rest",
+            },
+        )
+
+        required_diagnostics = {
+            "面板",
+            "收益窗口",
+            "因变量",
+            "机制序号",
+            "机制键",
+            "机制",
+            "控制变量",
+            "显式常数项",
+            "被提示公司×年度季度固定效应",
+            "日期固定效应",
+            "聚类方式",
+            "有限样本自由度修正",
+            "回归样本量",
+            "被提示公司聚类数",
+            "日期聚类数",
+            "固定效应组数",
+            "删除单例组观测数",
+            "R方",
+        }
+        for row in main_rows + coefficient_rows:
+            self.assertTrue(required_diagnostics.issubset(row))
+            self.assertEqual(row["显式常数项"], "是")
+            self.assertEqual(row["被提示公司×年度季度固定效应"], "是")
+            self.assertEqual(row["日期固定效应"], "否")
+            self.assertEqual(row["聚类方式"], "被提示公司和交易日期双向聚类")
+            self.assertEqual(row["有限样本自由度修正"], "是")
+            self.assertEqual(row["回归样本量"], len(panel))
+            self.assertEqual(row["被提示公司聚类数"], 12)
+            self.assertEqual(row["日期聚类数"], 48)
+            self.assertGreater(row["固定效应组数"], 1)
+            self.assertEqual(row["删除单例组观测数"], 0)
+            self.assertTrue(np.isfinite(row["R方"]))
+
+        coefficients = {
+            row["变量"]: row["系数"]
+            for row in coefficient_rows
+        }
+        for row in main_rows:
+            self.assertTrue(
+                {
+                    "第一组变量",
+                    "第二组变量",
+                    "第一组系数",
+                    "第二组系数",
+                    "系数差",
+                    "系数差（百分点）",
+                    "Wald统计量",
+                    "Wald自由度",
+                    "Wald p值",
+                }.issubset(row)
+            )
+            self.assertAlmostEqual(
+                row["第一组系数"],
+                coefficients[row["第一组变量"]],
+            )
+            self.assertAlmostEqual(
+                row["第二组系数"],
+                coefficients[row["第二组变量"]],
+            )
+            self.assertAlmostEqual(
+                row["系数差"],
+                row["第一组系数"] - row["第二组系数"],
+            )
+            self.assertAlmostEqual(
+                row["系数差（百分点）"],
+                row["系数差"] * 100,
+            )
+            self.assertTrue(np.isfinite(row["Wald统计量"]))
+            self.assertEqual(row["Wald自由度"], 1)
+            self.assertGreaterEqual(row["Wald p值"], 0.0)
+            self.assertLessEqual(row["Wald p值"], 1.0)
+
+    def test_absorbed_core_variable_raises_chinese_error_with_model_context(self):
+        """若核心变量只有固定效应组间变异，应中文指出机制和收益窗口后停止。"""
+        panel = self._build_panel()
+        fe_group = (
+            panel.groupby(
+                ["StkcdRecall", "yearQuarter"],
+                observed=True,
+                sort=False,
+            )
+            .ngroup()
+            .mod(2)
+        )
+        panel["quarterLag1size90plus"] = 1
+        panel["lag1hiavolsize90plus"] = fe_group
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with self.assertRaisesRegex(
+                ValueError,
+                (
+                    r"异常总成交量机制.*\[t, t\+1\].*"
+                    r"chAdjreturn_t_tp1_Recall_w.*固定效应.*吸收"
+                ),
+            ):
+                table5.run_mechanism_regression(
+                    panel,
+                    table5.OUTCOME_SPECS[0],
+                    table5.build_mechanism_specs(1)[0],
+                    ["control_a", "control_b"],
+                )
 
 
 if __name__ == "__main__":

@@ -8,7 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+import numpy as np
 import pandas as pd
+from linearmodels.iv import AbsorbingLS
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -306,6 +308,329 @@ def materialize_comparisons(
         raise ValueError(f"不支持的机制比较方式：{spec.comparison_mode}。")
 
     return output, (pairs[0], pairs[1])
+
+
+def drop_fe_singletons_iteratively(
+    reg: pd.DataFrame,
+    fe_code_cols: Sequence[str],
+) -> tuple[pd.DataFrame, int]:
+    """递归删除固定效应单例组，直至各固定效应维度都不再产生单例。"""
+    if not fe_code_cols:
+        return reg, 0
+
+    total_removed = 0
+    while True:
+        singleton = np.zeros(len(reg), dtype=bool)
+        for column in fe_code_cols:
+            codes = reg[column].to_numpy(dtype=np.int64, copy=False)
+            counts = np.bincount(codes)
+            singleton |= counts[codes] == 1
+
+        removed_now = int(singleton.sum())
+        if removed_now == 0:
+            return reg, total_removed
+
+        total_removed += removed_now
+        reg = reg.loc[~singleton].copy()
+
+
+def _mechanism_source_columns(spec: MechanismSpec) -> list[str]:
+    """返回当前机制构造四个比较变量实际需要读取的源字段。"""
+    if spec.comparison_mode == "strong_vs_rest":
+        return [
+            _BASELINE_90,
+            _BASELINE_5090,
+            spec.first_90,
+            spec.first_5090,
+        ]
+    if spec.comparison_mode == "low_vs_high":
+        columns = [
+            spec.first_90,
+            spec.first_5090,
+            spec.second_90,
+            spec.second_5090,
+        ]
+        if any(column is None for column in columns):
+            raise ValueError(f"{spec.label}机制缺少低高组比较字段。")
+        return [str(column) for column in columns]
+    raise ValueError(f"不支持的机制比较方式：{spec.comparison_mode}。")
+
+
+def _regression_context(outcome: OutcomeSpec, spec: MechanismSpec) -> str:
+    """返回回归校验错误中统一使用的中文模型定位信息。"""
+    return (
+        f"{spec.label}机制、收益窗口{outcome.label}、"
+        f"因变量{outcome.column}"
+    )
+
+
+def _check_core_variation(
+    reg: pd.DataFrame,
+    core_cols: Sequence[str],
+    outcome: OutcomeSpec,
+    spec: MechanismSpec,
+    fe_col: str | None = None,
+) -> None:
+    """校验四个核心变量有总体变异，并且不会被固定效应完全吸收。"""
+    for column in core_cols:
+        if reg[column].nunique(dropna=True) < 2:
+            raise ValueError(
+                f"{_regression_context(outcome, spec)}："
+                f"核心变量{column}没有有效变异，无法估计。"
+            )
+        if fe_col is not None:
+            has_within_group_variation = (
+                reg.groupby(fe_col, observed=True, sort=False)[column]
+                .nunique(dropna=True)
+                .gt(1)
+                .any()
+            )
+            if not has_within_group_variation:
+                raise ValueError(
+                    f"{_regression_context(outcome, spec)}："
+                    f"核心变量{column}被公司×年度季度固定效应"
+                    "完全吸收，无法估计。"
+                )
+
+
+def _significance_stars(p_value: float) -> str:
+    """按双侧检验的 p 值返回常用显著性星号。"""
+    if p_value < 0.01:
+        return "***"
+    if p_value < 0.05:
+        return "**"
+    if p_value < 0.10:
+        return "*"
+    return ""
+
+
+def run_mechanism_regression(
+    data: pd.DataFrame,
+    outcome: OutcomeSpec,
+    spec: MechanismSpec,
+    control_cols: Sequence[str],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """在同一模型中估计四个机制变量，并返回轻量主结果与系数明细。"""
+    controls = list(dict.fromkeys(control_cols))
+    if "const" in controls:
+        raise ValueError("控制变量不能命名为const，以免覆盖显式常数项。")
+
+    source_cols = _mechanism_source_columns(spec)
+    needed = list(
+        dict.fromkeys(
+            [
+                outcome.column,
+                "StkcdRecall",
+                "Trddt",
+                "yearQuarter",
+                *controls,
+                *source_cols,
+            ]
+        )
+    )
+    missing = [column for column in needed if column not in data.columns]
+    if missing:
+        raise ValueError(
+            f"{_regression_context(outcome, spec)}缺少以下回归字段："
+            + "、".join(missing)
+        )
+
+    # 性能约束：先从宽表切出当前模型所需字段，再构造比较变量。
+    compact = data.loc[:, needed].copy()
+    materialized, pairs = materialize_comparisons(compact, spec)
+    core_cols = [
+        column
+        for pair in pairs
+        for column in (pair.first_col, pair.second_col)
+    ]
+    model_cols = [
+        outcome.column,
+        "StkcdRecall",
+        "Trddt",
+        "yearQuarter",
+        *core_cols,
+        *controls,
+    ]
+    reg = materialized.loc[:, model_cols].dropna().copy()
+    if reg.empty:
+        raise ValueError(
+            f"{_regression_context(outcome, spec)}：统一删缺失后没有可用观测。"
+        )
+    _check_core_variation(reg, core_cols, outcome, spec)
+
+    reg["_fe_firm_yearquarter"] = (
+        reg.groupby(
+            ["StkcdRecall", "yearQuarter"],
+            observed=True,
+            sort=False,
+        )
+        .ngroup()
+        .astype("int64")
+    )
+    reg, singleton_removed = drop_fe_singletons_iteratively(
+        reg,
+        ["_fe_firm_yearquarter"],
+    )
+    if reg.empty:
+        raise ValueError(
+            f"{_regression_context(outcome, spec)}：递归删除固定效应单例后"
+            "没有可用观测。"
+        )
+
+    _check_core_variation(
+        reg,
+        core_cols,
+        outcome,
+        spec,
+        fe_col="_fe_firm_yearquarter",
+    )
+    fe_count = int(reg["_fe_firm_yearquarter"].nunique())
+    firm_count = int(reg["StkcdRecall"].nunique())
+    date_count = int(reg["Trddt"].nunique())
+    if fe_count < 2:
+        raise ValueError(
+            f"{_regression_context(outcome, spec)}："
+            "被提示公司×年度季度固定效应至少需要两个组。"
+        )
+    if firm_count < 2:
+        raise ValueError(
+            f"{_regression_context(outcome, spec)}：被提示公司聚类至少需要两个组。"
+        )
+    if date_count < 2:
+        raise ValueError(
+            f"{_regression_context(outcome, spec)}：交易日期聚类至少需要两个组。"
+        )
+
+    absorb = pd.DataFrame(
+        {
+            "firm_yearquarter": pd.Categorical(
+                reg["_fe_firm_yearquarter"]
+            )
+        },
+        index=reg.index,
+    )
+    clusters = pd.DataFrame(
+        {
+            "firm": pd.factorize(reg["StkcdRecall"], sort=False)[0],
+            "date": pd.factorize(reg["Trddt"], sort=False)[0],
+        },
+        index=reg.index,
+    )
+    x_cols = [*core_cols, *controls]
+    exog = reg[x_cols].astype("float64")
+    exog.insert(0, "const", 1.0)
+
+    model = AbsorbingLS(
+        dependent=reg[outcome.column].astype("float64"),
+        exog=exog,
+        absorb=absorb,
+        drop_absorbed=True,
+    )
+    result = model.fit(
+        cov_type="clustered",
+        clusters=clusters,
+        debiased=True,
+    )
+
+    unestimated_core = [
+        column for column in core_cols if column not in result.params.index
+    ]
+    if unestimated_core:
+        raise ValueError(
+            f"{_regression_context(outcome, spec)}：核心变量"
+            + "、".join(unestimated_core)
+            + "被固定效应吸收或未估计。"
+        )
+
+    diagnostics: dict[str, object] = {
+        "面板": outcome.panel,
+        "收益窗口": outcome.label,
+        "因变量": outcome.column,
+        "机制序号": spec.order,
+        "机制键": spec.key,
+        "机制": spec.label,
+        "控制变量": "是" if controls else "否",
+        "控制变量数": len(controls),
+        "显式常数项": "是",
+        "被提示公司×年度季度固定效应": "是",
+        "日期固定效应": "否",
+        "聚类方式": "被提示公司和交易日期双向聚类",
+        "有限样本自由度修正": "是",
+        "回归样本量": int(result.nobs),
+        "被提示公司聚类数": firm_count,
+        "日期聚类数": date_count,
+        "固定效应组数": fe_count,
+        "删除单例组观测数": int(singleton_removed),
+        "R方": float(result.rsquared),
+    }
+
+    variable_metadata = {
+        pair.first_col: (pair, pair.first_label, 1)
+        for pair in pairs
+    }
+    variable_metadata.update(
+        {
+            pair.second_col: (pair, pair.second_label, 2)
+            for pair in pairs
+        }
+    )
+    coefficient_rows: list[dict[str, object]] = []
+    for variable_order, variable in enumerate(core_cols, start=1):
+        pair, variable_label, within_pair_order = variable_metadata[variable]
+        beta = float(result.params[variable])
+        standard_error = float(result.std_errors[variable])
+        t_value = float(result.tstats[variable])
+        p_value = float(result.pvalues[variable])
+        coefficient_rows.append(
+            {
+                **diagnostics,
+                "规模组": pair.size_key,
+                "规模组标签": pair.size_label,
+                "变量": variable,
+                "变量顺序": variable_order,
+                "组内变量顺序": within_pair_order,
+                "变量标签": variable_label,
+                "变量类型": "机制核心变量",
+                "估计状态": "已估计",
+                "系数": beta,
+                "聚类标准误": standard_error,
+                "系数（百分点）": beta * 100,
+                "聚类标准误（百分点）": standard_error * 100,
+                "t值": t_value,
+                "p值": p_value,
+                "显著性": _significance_stars(p_value),
+            }
+        )
+
+    main_rows: list[dict[str, object]] = []
+    for pair in pairs:
+        wald = result.wald_test(
+            formula=f"{pair.first_col} = {pair.second_col}"
+        )
+        first_beta = float(result.params[pair.first_col])
+        second_beta = float(result.params[pair.second_col])
+        coefficient_difference = first_beta - second_beta
+        main_rows.append(
+            {
+                **diagnostics,
+                "规模组": pair.size_key,
+                "规模组标签": pair.size_label,
+                "第一组变量": pair.first_col,
+                "第一组标签": pair.first_label,
+                "第二组变量": pair.second_col,
+                "第二组标签": pair.second_label,
+                "第一组系数": first_beta,
+                "第二组系数": second_beta,
+                "系数差": coefficient_difference,
+                "系数差（百分点）": coefficient_difference * 100,
+                "Wald检验式": f"{pair.first_col} = {pair.second_col}",
+                "Wald统计量": float(np.asarray(wald.stat).squeeze()),
+                "Wald自由度": int(wald.df),
+                "Wald p值": float(wald.pval),
+            }
+        )
+
+    return main_rows, coefficient_rows
 
 
 def read_and_validate_header(input_path: str | Path) -> tuple[str, ...]:
