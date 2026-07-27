@@ -68,6 +68,17 @@ EXPECTED_SUE_FIELD_TEMPLATES = (
     ("lag1hi_sue{}_possize90plus", "lag1hi_sue{}_possize50_90"),
     ("lag1hi_sue{}_negsize90plus", "lag1hi_sue{}_negsize50_90"),
 )
+EXPECTED_MECHANISM_SEQUENCE_SUE1 = [
+    (1, "high_total_volume", "异常总成交量", "lag1hiavolsize90plus", "lag1hiavolsize50_90", None, None),
+    (2, "high_small_trade_volume", "异常散户成交量（A股小单替代）", "lag1hiavolSsize90plus", "lag1hiavolSsize50_90", None, None),
+    (3, "high_media", "媒体覆盖", "lag1hiAEVsize90plus", "lag1hiAEVsize50_90", None, None),
+    (4, "top_mover", "价格异动", "lag1topMoversize90plus", "lag1topMoversize50_90", None, None),
+    (5, "positive_sue", "正向盈余惊喜", "lag1sue1possize90plus", "lag1sue1possize50_90", None, None),
+    (6, "negative_sue", "负向盈余惊喜", "lag1sue1negsize90plus", "lag1sue1negsize50_90", None, None),
+    (7, "extreme_positive_sue", "极端正向盈余惊喜", "lag1hi_sue1_possize90plus", "lag1hi_sue1_possize50_90", None, None),
+    (8, "extreme_negative_sue", "极端负向盈余惊喜", "lag1hi_sue1_negsize90plus", "lag1hi_sue1_negsize50_90", None, None),
+    (9, "interference", "干扰程度", "lowInterferenceEWLag1S90p", "lowInterferenceEWLag1S5090", "highInterferenceEWLag1S90p", "highInterferenceEWLag1S5090"),
+]
 
 
 class Table5MechanismTests(unittest.TestCase):
@@ -126,6 +137,22 @@ class Table5MechanismTests(unittest.TestCase):
                         None,
                     ),
                 )
+
+    def test_mechanism_sequence_locks_orders_labels_and_fields(self):
+        """若机制排序或标签错配，后续按编号输出的列会与设计规格不一致。"""
+        actual = [
+            (
+                spec.order,
+                spec.key,
+                spec.label,
+                spec.first_90,
+                spec.first_5090,
+                spec.second_90,
+                spec.second_5090,
+            )
+            for spec in table5.build_mechanism_specs(1)
+        ]
+        self.assertEqual(actual, EXPECTED_MECHANISM_SEQUENCE_SUE1)
 
     def test_specs_are_immutable_and_reject_unknown_sue_id(self):
         """若规格可变或接受错误 SUE，后续三份表会相互污染。"""
