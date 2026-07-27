@@ -8,6 +8,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
+import pandas as pd
+
 import 表5_心理机制 as table5
 
 
@@ -209,6 +211,112 @@ class Table5MechanismTests(unittest.TestCase):
         missing = set(table5.required_input_columns()) - {"StkcdRecall", "Trddt"}
         for column in missing:
             self.assertIn(column, message)
+
+    def test_rest_partition(self):
+        """若其余提示未排除强联系或跨规模覆盖，两个比较组会被错误污染。"""
+        spec = table5.build_mechanism_specs(1)[0]
+        data = pd.DataFrame(
+            {
+                "quarterLag1size90plus": [1, 1, 0, pd.NA],
+                "quarterLag1size50_90": [1, 0, 1, 1],
+                "lag1hiavolsize90plus": [1, 0, 0, pd.NA],
+                "lag1hiavolsize50_90": [0, 0, 1, 0],
+            },
+            index=[101, 103, 107, 109],
+        )
+
+        materialized, pairs = table5.materialize_comparisons(data, spec)
+
+        self.assertEqual(materialized.index.tolist(), [101, 103, 107, 109])
+        self.assertEqual(len(materialized), len(data))
+        self.assertEqual(len(pairs), 2)
+        self.assertEqual([pair.size_key for pair in pairs], ["90plus", "50_90"])
+        self.assertEqual(
+            materialized[pairs[0].first_col].tolist(),
+            [1, 0, 0, pd.NA],
+        )
+        self.assertEqual(
+            materialized[pairs[0].second_col].tolist(),
+            [0, 1, 0, pd.NA],
+        )
+        self.assertEqual(
+            materialized[pairs[1].first_col].tolist(),
+            [0, 0, 1, 0],
+        )
+        self.assertEqual(
+            materialized[pairs[1].second_col].tolist(),
+            [1, 0, 0, 1],
+        )
+        for pair, baseline in zip(
+            pairs,
+            ["quarterLag1size90plus", "quarterLag1size50_90"],
+            strict=True,
+        ):
+            self.assertIn(spec.key, pair.first_col)
+            self.assertIn(pair.size_key, pair.first_col)
+            self.assertIn(spec.key, pair.second_col)
+            self.assertIn(pair.size_key, pair.second_col)
+            observed = materialized[pair.first_col] + materialized[pair.second_col]
+            pd.testing.assert_series_equal(
+                observed,
+                data[baseline].astype("Int64"),
+                check_names=False,
+            )
+
+    def test_invalid_subset_raises(self):
+        """若强联系提示不属于对应基准提示，回归比较的样本定义不成立。"""
+        spec = table5.build_mechanism_specs(1)[0]
+        data = pd.DataFrame(
+            {
+                "quarterLag1size90plus": [0],
+                "quarterLag1size50_90": [1],
+                "lag1hiavolsize90plus": [1],
+                "lag1hiavolsize50_90": [0],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "强联系提示.*基准提示"):
+            table5.materialize_comparisons(data, spec)
+
+    def test_invalid_binary_values_raise(self):
+        """若核心字段接受非二元值，机制组别会静默偏离提示定义。"""
+        spec = table5.build_mechanism_specs(1)[0]
+        data = pd.DataFrame(
+            {
+                "quarterLag1size90plus": [1],
+                "quarterLag1size50_90": [1],
+                "lag1hiavolsize90plus": [2],
+                "lag1hiavolsize50_90": [0],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "只能取0、1或缺失"):
+            table5.materialize_comparisons(data, spec)
+
+    def test_interference_returns_low_high_pairs_without_rest(self):
+        """若干扰机制生成其余提示，会把低高干扰比较误写成基准提示分割。"""
+        spec = table5.build_mechanism_specs(1)[-1]
+        data = pd.DataFrame(
+            {
+                "lowInterferenceEWLag1S90p": [1, 0],
+                "lowInterferenceEWLag1S5090": [0, 1],
+                "highInterferenceEWLag1S90p": [0, 1],
+                "highInterferenceEWLag1S5090": [1, 0],
+            },
+            index=[31, 37],
+        )
+
+        materialized, pairs = table5.materialize_comparisons(data, spec)
+
+        self.assertEqual(len(materialized), len(data))
+        self.assertEqual(materialized.index.tolist(), [31, 37])
+        self.assertEqual([pair.first_label for pair in pairs], ["低干扰提示", "低干扰提示"])
+        self.assertEqual([pair.second_label for pair in pairs], ["高干扰提示", "高干扰提示"])
+        self.assertEqual(materialized[pairs[0].first_col].tolist(), [1, 0])
+        self.assertEqual(materialized[pairs[0].second_col].tolist(), [0, 1])
+        self.assertEqual(materialized[pairs[1].first_col].tolist(), [0, 1])
+        self.assertEqual(materialized[pairs[1].second_col].tolist(), [1, 0])
+        self.assertFalse(any("rest" in column for column in materialized.columns))
 
 
 if __name__ == "__main__":

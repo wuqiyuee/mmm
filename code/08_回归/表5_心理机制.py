@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+import pandas as pd
+
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_INPUT_PATH = ROOT / "中间结果/04_合并数据/Pattern样本_最终回归面板.csv"
@@ -31,6 +33,16 @@ class MechanismSpec:
     second_5090: str | None
     comparison_mode: str
     source_note: str
+
+
+@dataclass(frozen=True)
+class ComparisonPair:
+    size_key: str
+    size_label: str
+    first_col: str
+    second_col: str
+    first_label: str
+    second_label: str
 
 
 OUTCOME_SPECS = (
@@ -61,6 +73,10 @@ _INTERFERENCE_FIELDS = (
     "lowInterferenceEWLag1S5090",
     "highInterferenceEWLag1S90p",
     "highInterferenceEWLag1S5090",
+)
+_SIZE_GROUPS = (
+    ("90plus", "市值前10%", _BASELINE_90),
+    ("50_90", "市值50%至90%", _BASELINE_5090),
 )
 
 
@@ -197,6 +213,99 @@ def required_input_columns() -> list[str]:
             if spec.second_5090 is not None:
                 columns.append(spec.second_5090)
     return list(dict.fromkeys(columns))
+
+
+def _validate_binary_columns(data: pd.DataFrame, columns: Sequence[str]) -> None:
+    """校验机制比较中每个核心提示字段只能为二元值或缺失。"""
+    missing = [column for column in columns if column not in data.columns]
+    if missing:
+        raise ValueError("机制比较缺少以下核心字段：" + "、".join(missing))
+
+    for column in columns:
+        values = data[column]
+        invalid = values.notna() & ~values.isin((0, 1))
+        if invalid.any():
+            raise ValueError(f"核心字段{column}只能取0、1或缺失。")
+
+
+def _comparison_column_name(spec: MechanismSpec, size_key: str, role: str) -> str:
+    """返回不会在不同机制或规模组之间覆盖的比较变量名。"""
+    return f"table5_{spec.key}_{size_key}_{role}"
+
+
+def _nullable_binary(values: pd.Series) -> pd.Series:
+    """将已校验的提示字段规范为可保留缺失值的二元序列。"""
+    return values.astype("Int64")
+
+
+def materialize_comparisons(
+    data: pd.DataFrame,
+    spec: MechanismSpec,
+) -> tuple[pd.DataFrame, tuple[ComparisonPair, ComparisonPair]]:
+    """构造一类机制的两个规模比较变量，并在回归前校验二元和子集口径。"""
+    output = data.copy()
+    pairs: list[ComparisonPair] = []
+
+    if spec.comparison_mode == "strong_vs_rest":
+        for size_key, size_label, baseline_col in _SIZE_GROUPS:
+            strong_col = spec.first_90 if size_key == "90plus" else spec.first_5090
+            _validate_binary_columns(output, (baseline_col, strong_col))
+
+            baseline = output[baseline_col]
+            strong = output[strong_col]
+            invalid_subset = strong.eq(1) & baseline.eq(0)
+            if invalid_subset.any():
+                raise ValueError(
+                    f"强联系提示字段{strong_col}为1时，对应基准提示字段"
+                    f"{baseline_col}不能为0。"
+                )
+
+            first_col = _comparison_column_name(spec, size_key, "strong")
+            second_col = _comparison_column_name(spec, size_key, "rest")
+            output[first_col] = _nullable_binary(strong)
+
+            rest = pd.Series(pd.NA, index=output.index, dtype="Int64")
+            known = baseline.notna() & strong.notna()
+            rest.loc[known] = (
+                (baseline.loc[known] == 1) & (strong.loc[known] == 0)
+            ).astype("Int64")
+            output[second_col] = rest
+            pairs.append(
+                ComparisonPair(
+                    size_key,
+                    size_label,
+                    first_col,
+                    second_col,
+                    "强联系提示",
+                    "其余提示",
+                )
+            )
+    elif spec.comparison_mode == "low_vs_high":
+        for size_key, size_label, _ in _SIZE_GROUPS:
+            low_col = spec.first_90 if size_key == "90plus" else spec.first_5090
+            high_col = spec.second_90 if size_key == "90plus" else spec.second_5090
+            if high_col is None:
+                raise ValueError("干扰机制缺少高干扰提示字段。")
+            _validate_binary_columns(output, (low_col, high_col))
+
+            first_col = _comparison_column_name(spec, size_key, "low")
+            second_col = _comparison_column_name(spec, size_key, "high")
+            output[first_col] = _nullable_binary(output[low_col])
+            output[second_col] = _nullable_binary(output[high_col])
+            pairs.append(
+                ComparisonPair(
+                    size_key,
+                    size_label,
+                    first_col,
+                    second_col,
+                    "低干扰提示",
+                    "高干扰提示",
+                )
+            )
+    else:
+        raise ValueError(f"不支持的机制比较方式：{spec.comparison_mode}。")
+
+    return output, (pairs[0], pairs[1])
 
 
 def read_and_validate_header(input_path: str | Path) -> tuple[str, ...]:
