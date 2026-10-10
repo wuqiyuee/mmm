@@ -24,10 +24,16 @@ except ModuleNotFoundError:
 
 
 base_dir = Path(
-    r"/Users/qiyuewu/Desktop/mmm复现数据包/input/CSMAR/股票历史日行情信息表(前复权)2000-01-01 至 2025-12-31"
+    '/Users/qiyuewu/Desktop/mmm复现数据包/'
+    'input/CSMAR/'
+    '股票历史日行情信息表(前复权)1996-01-01 至 2025-12-31'
 )
 
-output_path = '/Users/qiyuewu/Desktop/mmm复现数据包/中间结果/00_合并原始数据/CSMAR_股票历史日行情信息表_前复权_2000_2025_合并结果.csv'
+output_path = (
+    '/Users/qiyuewu/Desktop/mmm复现数据包/'
+    '中间结果/00_合并原始数据/'
+    'CSMAR_股票历史日行情信息表_前复权_1996_2025_合并结果.csv'
+)
 
 csv_files = sorted(
     file

@@ -4,7 +4,7 @@ import os
 import gc
 
 # 基础路径
-base_dir = '/Users/qiyuewu/Desktop/mmm复现数据包/input/CSMAR/个股买卖不平衡指标表（日）'
+base_dir = '/Users/qiyuewu/Desktop/mmm复现数据包/input/CSMAR/个股买卖不平衡指标表（日）2003-01-02至2026-08-31'
 
 # 存储所有子文件夹合并后的 DataFrame
 all_dfs = []

@@ -6,13 +6,13 @@ import gc
 ROOT = Path('/Users/qiyuewu/Desktop/mmm复现数据包')
 
 # 基础路径：直接指向“个股日度收益率（升级测试）”
-base_dir = ROOT/'input/CSMAR/个股日度收益率（升级测试）'
+base_dir = ROOT/'input/CSMAR/个股日度收益率（升级测试）1995-01-01至于1999-12-31'
 
 # 是否导出合并结果
 save_output = True
 
 # 导出文件名（如果 save_output=True 时会用到）
-output_file = ROOT /'中间结果/00_合并原始数据/CSMAR_日个股回报率(升级测试)_2000_2025.csv'
+output_file = ROOT /'中间结果/00_合并原始数据/CSMAR_日个股回报率(升级测试)_1995_2026.csv'
 output_file.parent.mkdir(parents=True, exist_ok=True)
 
 all_dfs = []
