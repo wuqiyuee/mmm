@@ -95,145 +95,267 @@ def calculate_sue_cue_averages(collapsed, denominator_mode):
 ## 路径设置
 # =============================================================================
 
-ROOT = Path('/Users/qiyuewu/Desktop/mmm复现数据包')
+def build_pattern_paths(root):
+    """根据项目根目录，构造模式公司脚本所需的文件路径。"""
+    root = Path(root)
 
-MemoryMatrixPattern_path = ROOT / '中间结果/03_记忆矩阵/MemoryMatrixPattern(交易变量用公告后首个交易日).csv'
-TRD_Cale_td_path = ROOT / '中间结果/01_清洗后样本/市场交易日历_td.csv'
-TRD_Dalyr_DGTW_path = ROOT / '中间结果/01_清洗后样本/DGTW构建用个股日度面板.csv'
-marketcap_group_path = ROOT / '中间结果/02_变量构造结果/8月度市值分组/月度市值分组.csv'
-industry_path = ROOT / '中间结果/02_变量构造结果/同行业识别/个股行业代码完整面板_RESSET补缺.csv'
-sue_path = ROOT/'中间结果/02_变量构造结果/4sue/sue.csv'
-SC_NetWorkRelationsIndex_path = ROOT/'input/CSMAR/供应链网络关系指标表2001-12-31至2025-12-31/SC_NetworkRelationsIndex.csv'
-IAR_Rept_path = ROOT/'input/CSMAR/年、中、季报基本情况文件1990-12-31至2026-06-30/IAR_Rept.csv'
-AES_AEV_controls_path = ROOT/'中间结果/02_变量构造结果/3报刊新闻_AES_AEV/报刊新闻_AES_AEV_真实交易日控制变量.csv'
-sample_intermediate_out_path = ROOT / "中间结果/04_合并数据/Sample_intermediate_pattern.csv"
-adjusted_return_path = ROOT / "中间结果/02_变量构造结果/1DGTW特征调整收益率/DGTW特征调整收益率.csv"
-output_path = ROOT/'中间结果/04_合并数据/Pattern样本_最终回归面板.csv'
-performance_forecast_controls_path = (
-    ROOT / "中间结果/02_变量构造结果/5公司公告事件/业绩预告快报控制变量_公告日期口径.csv"
-)
-other_event_controls_path = (
-    ROOT / "中间结果/02_变量构造结果/5公司公告事件/专题研究事件控制变量_公告日期口径.csv"
-)
+    relative_paths = {
+        # 输入文件
+        "MemoryMatrixPattern_path":
+            "中间结果/03_记忆矩阵/MemoryMatrixPattern(交易变量用公告后首个交易日).csv",
+        "TRD_Cale_td_path":
+            "中间结果/01_清洗后样本/市场交易日历_td.csv",
+        "TRD_Dalyr_DGTW_path":
+            "中间结果/01_清洗后样本/DGTW构建用个股日度面板.csv",
+        "marketcap_group_path":
+            "中间结果/02_变量构造结果/8月度市值分组/月度市值分组.csv",
+        "industry_path":
+            "中间结果/02_变量构造结果/同行业识别/个股行业代码完整面板_RESSET补缺.csv",
+        "sue_path":
+            "中间结果/02_变量构造结果/4sue/sue.csv",
+        "SC_NetWorkRelationsIndex_path":
+            "input/CSMAR/供应链网络关系指标表2001-12-31至2025-12-31/SC_NetworkRelationsIndex.csv",
+        "IAR_Rept_path":
+            "input/CSMAR/年、中、季报基本情况文件1990-12-31至2026-06-30/IAR_Rept.csv",
+        "AES_AEV_controls_path":
+            "中间结果/02_变量构造结果/3报刊新闻_AES_AEV/报刊新闻_AES_AEV_真实交易日控制变量.csv",
+        "adjusted_return_path":
+            "中间结果/02_变量构造结果/1DGTW特征调整收益率/DGTW特征调整收益率.csv",
+        "performance_forecast_controls_path":
+            "中间结果/02_变量构造结果/5公司公告事件/业绩预告快报控制变量_公告日期口径.csv",
+        "other_event_controls_path":
+            "中间结果/02_变量构造结果/5公司公告事件/专题研究事件控制变量_公告日期口径.csv",
 
-cue_events_out_path = ROOT / '中间结果/04_合并数据/Pattern_cue_events_after_collapse.csv'
-cue_events_out_path.parent.mkdir(parents=True, exist_ok=True)
-
-# 盈余惊喜聚合分母口径
-SUE_DENOMINATOR_MODE = "nonmissing_sue"
-# "nonmissing_sue": 每种 SUE 只使用该变量非缺失的 cue 数量/市值作分母
-# "all_cues": 三种 SUE 都使用全部 cue 数量/市值作分母，对齐原文代码
-
-VALID_SUE_DENOMINATOR_MODES = {"nonmissing_sue", "all_cues"}
-if SUE_DENOMINATOR_MODE not in VALID_SUE_DENOMINATOR_MODES:
-    raise ValueError(
-        "SUE_DENOMINATOR_MODE 只能是 "
-        f"{VALID_SUE_DENOMINATOR_MODES}，当前是 {SUE_DENOMINATOR_MODE}"
-    )
-
-# =============================================================================
-## 分析师共同覆盖过滤参数
-# =============================================================================
-
-DROP_ANALYST_OVERLAP = True
-# True: 删除有共同分析师覆盖的公司对
-# False: 只合并标记，不删除
-
-ANALYST_OVERLAP_ROOT = ROOT / '中间结果/03_记忆矩阵/分析师共同覆盖_参考文献后'
-
-ANALYST_ID_MODE = 'split'
-# 'split': 拆开 AnanmID，按个人分析师识别，推荐主口径
-# 'team': 不拆开 AnanmID，按原始 AnanmID 字符串识别
-
-ANALYST_LOOKBACK_DAYS = 365
-# 可选：365 或 45
-
-
-# 市值断点依据
-MARKETCAP_BREAKPOINT_MODE = "prev_month"  
-# "prev_month": 使用上月市值断点，避免前视
-# "same_month": 使用公告所在月市值断点，对齐原文
-
-
-# 事件反应日口径
-EVENT_DATE_MODE = "next_if_nontrading"
-
-VALID_EVENT_DATE_MODES = {"next_if_nontrading", "strict_next_trading"}
-
-if EVENT_DATE_MODE not in VALID_EVENT_DATE_MODES:
-    raise ValueError(
-        f"EVENT_DATE_MODE 只能是 {VALID_EVENT_DATE_MODES}，当前是 {EVENT_DATE_MODE}"
-    )
-# "next_if_nontrading": 主口径，只调整非交易日
-# "strict_next_trading": 稳健性口径，交易日也顺延
-
-
-# 读取记忆矩阵
-mm = pd.read_csv(
-    MemoryMatrixPattern_path,
-    encoding='utf-8',
-    parse_dates=['Annodt','event_Trddt']
-)
-
-mm['Stkcd'] = mm['Stkcd'].apply(normalize_stock_code)
-mm['StkcdRecall'] = mm['StkcdRecall'].apply(normalize_stock_code)
-
-# 合并市值数据
-# 所以需要先将anndot调整到交易日，再匹配t-3的市值。
-
-# 1. 读取交易日历，把公告日映射到事件交易日(之前记忆矩阵生成了)
-required_event_cols = {"event_Trddt", "event_td"}
-missing_event_cols = required_event_cols - set(mm.columns)
-if missing_event_cols:
-    raise ValueError(f"MemoryMatrixPattern 缺少事件交易日字段: {missing_event_cols}")
-
-mm["event_Trddt"] = pd.to_datetime(mm["event_Trddt"], errors="coerce")
-mm["event_td"] = pd.to_numeric(mm["event_td"], errors="coerce")
-mm["td_tm3"] = mm["event_td"] - 3
-# 得到td-3序号用于下一步匹配市值
-
-# 2.读取日度市值
-mktcap = pd.read_csv(
-    TRD_Dalyr_DGTW_path,
-    encoding='utf-8',
-    usecols=['Stkcd', 'td', 'size', 'sizew'],
-    dtype={'Stkcd': 'string'}
-)
-
-mktcap['Stkcd'] = mktcap['Stkcd'].apply(normalize_stock_code)
-mktcap['td'] = pd.to_numeric(mktcap['td'], errors='coerce')
-
-mktcap = mktcap.rename(
-    columns={
-        'td': 'td_tm3',
-        'size': 'mktcap_tm3',
-        'sizew': 'float_mktcap_tm3'
+        # 输出文件
+        "sample_intermediate_out_path":
+            "中间结果/04_合并数据/Sample_intermediate_pattern.csv",
+        "cue_events_out_path":
+            "中间结果/04_合并数据/Pattern_cue_events_after_collapse.csv",
+        "output_path":
+            "中间结果/04_合并数据/Pattern样本_最终回归面板.csv",
     }
+
+    return {
+        name: root / relative_path
+        for name, relative_path in relative_paths.items()
+    }
+
+
+ROOT = Path("/Users/qiyuewu/Desktop/mmm复现数据包")
+paths = build_pattern_paths(ROOT)
+
+# 分步封装期间，保留原变量名，供后面的代码继续使用。
+MemoryMatrixPattern_path = paths["MemoryMatrixPattern_path"]
+TRD_Cale_td_path = paths["TRD_Cale_td_path"]
+TRD_Dalyr_DGTW_path = paths["TRD_Dalyr_DGTW_path"]
+marketcap_group_path = paths["marketcap_group_path"]
+industry_path = paths["industry_path"]
+sue_path = paths["sue_path"]
+SC_NetWorkRelationsIndex_path = paths["SC_NetWorkRelationsIndex_path"]
+IAR_Rept_path = paths["IAR_Rept_path"]
+AES_AEV_controls_path = paths["AES_AEV_controls_path"]
+adjusted_return_path = paths["adjusted_return_path"]
+performance_forecast_controls_path = paths["performance_forecast_controls_path"]
+other_event_controls_path = paths["other_event_controls_path"]
+sample_intermediate_out_path = paths["sample_intermediate_out_path"]
+cue_events_out_path = paths["cue_events_out_path"]
+output_path = paths["output_path"]
+
+# =============================================================================
+# 参数构造与校验
+# =============================================================================
+
+def build_pattern_config(
+    *,
+    sue_denominator_mode,
+    drop_analyst_overlap,
+    analyst_id_mode,
+    analyst_lookback_days,
+    marketcap_breakpoint_mode,
+    event_date_mode,
+    top_mover_mode="any",
+):
+    """集中构造并校验模式公司脚本的运行参数。"""
+
+    config = {
+        "SUE_DENOMINATOR_MODE": sue_denominator_mode,
+        "DROP_ANALYST_OVERLAP": drop_analyst_overlap,
+        "ANALYST_ID_MODE": analyst_id_mode,
+        "ANALYST_LOOKBACK_DAYS": analyst_lookback_days,
+        "MARKETCAP_BREAKPOINT_MODE": marketcap_breakpoint_mode,
+        "EVENT_DATE_MODE": event_date_mode,
+        "TOP_MOVER_MODE": top_mover_mode,
+    }
+
+    choice_rules = {
+        "SUE_DENOMINATOR_MODE": (
+            "盈余惊喜分母口径",
+            ("nonmissing_sue", "all_cues"),
+        ),
+        "ANALYST_ID_MODE": (
+            "分析师识别口径",
+            ("split", "team"),
+        ),
+        "MARKETCAP_BREAKPOINT_MODE": (
+            "市值断点月份",
+            ("prev_month", "same_month"),
+        ),
+        "EVENT_DATE_MODE": (
+            "自身公告事件日口径",
+            ("next_if_nontrading", "strict_next_trading"),
+        ),
+        "TOP_MOVER_MODE": (
+            "历史价格异动口径",
+            ("any", "both"),
+        ),
+    }
+
+    for name, (label, allowed_values) in choice_rules.items():
+        if config[name] not in allowed_values:
+            raise ValueError(
+                f"{label}只能取 {allowed_values}，"
+                f"当前设置为 {config[name]!r}"
+            )
+
+    if not isinstance(drop_analyst_overlap, bool):
+        raise ValueError("是否删除共同分析师覆盖公司对，必须设置为布尔值")
+
+    if (
+        not isinstance(analyst_lookback_days, int)
+        or isinstance(analyst_lookback_days, bool)
+        or analyst_lookback_days <= 0
+    ):
+        raise ValueError("分析师回溯天数必须为正整数")
+
+    return config
+
+
+# 今后调整口径，集中修改下面的参数值。
+config = build_pattern_config(
+    # 每种盈余惊喜使用自身非缺失提示公司数量／市值作分母；
+    # 若改为全部提示公司作分母，使用 "all_cues"。
+    sue_denominator_mode="nonmissing_sue",
+
+    # 删除有共同分析师覆盖的公司对。
+    drop_analyst_overlap=True,
+
+    # 按个人分析师识别；按原始团队字符串识别则使用 "team"。
+    analyst_id_mode="split",
+
+    # 选择对应回溯窗口的已有分析师共同覆盖文件。
+    analyst_lookback_days=365,
+
+    # 使用上月市值断点；使用当月断点则设置为 "same_month"。
+    marketcap_breakpoint_mode="prev_month",
+
+    # 自身公告：交易日保留，非交易日映射至下一交易日。
+    # 交易日也顺延则设置为 "strict_next_trading"。
+    event_date_mode="next_if_nontrading",
+    
+    # 历史共同公告时，任意一家进入价格异动组。
+    # 要求两家公司同时进入，则设置为 "both"。
+    top_mover_mode="any",
 )
 
-# 3. 为了省内存，先对 MemoryMatrixPattern 中需要合并的 Stkcd-td_tm3 去重
-mktcap_key = (
-    mm[['Stkcd', 'td_tm3']]
-    .drop_duplicates()
-    .merge(
-        mktcap[['Stkcd', 'td_tm3', 'mktcap_tm3', 'float_mktcap_tm3']],
-        how='left',
-        on=['Stkcd', 'td_tm3'],
-        validate='m:1'
+# 分步封装期间，保留原变量名供后面的代码使用。
+SUE_DENOMINATOR_MODE = config["SUE_DENOMINATOR_MODE"]
+DROP_ANALYST_OVERLAP = config["DROP_ANALYST_OVERLAP"]
+ANALYST_ID_MODE = config["ANALYST_ID_MODE"]
+ANALYST_LOOKBACK_DAYS = config["ANALYST_LOOKBACK_DAYS"]
+MARKETCAP_BREAKPOINT_MODE = config["MARKETCAP_BREAKPOINT_MODE"]
+EVENT_DATE_MODE = config["EVENT_DATE_MODE"]
+
+# 分析师目录暂时保留，后续封装读取函数时再统一整理。
+ANALYST_OVERLAP_ROOT = (
+    ROOT / "中间结果/03_记忆矩阵/分析师共同覆盖_参考文献后"
+)
+
+# =============================================================================
+# 读取记忆矩阵并合并提示公司市值
+# =============================================================================
+
+def load_pattern_matrix_with_marketcap(matrix_path, daily_panel_path):
+    """读取公司对记忆矩阵，合并提示公司事件前第三个交易日的市值。"""
+
+    mm = pd.read_csv(
+        matrix_path,
+        encoding="utf-8",
+        parse_dates=["Annodt", "event_Trddt"],
     )
-)
 
-# 4. 合并回完整 MemoryMatrixPattern
-mm = mm.merge(
-    mktcap_key,
-    how='left',
-    on=['Stkcd', 'td_tm3'],
-    validate='m:1'
-)
+    mm["Stkcd"] = mm["Stkcd"].apply(normalize_stock_code)
+    mm["StkcdRecall"] = mm["StkcdRecall"].apply(normalize_stock_code)
 
-print('合并 t-3 市值后行数：', len(mm))
-print('t-3 总市值缺失数：', mm['mktcap_tm3'].isna().sum())
-print('t-3 总市值缺失比例：', mm['mktcap_tm3'].isna().mean())
+    # 直接使用上游生成的事件交易日与交易日序号。
+    required_event_cols = {"event_Trddt", "event_td"}
+    missing_event_cols = required_event_cols - set(mm.columns)
+
+    if missing_event_cols:
+        raise ValueError(
+            f"记忆矩阵缺少事件交易日字段：{missing_event_cols}"
+        )
+
+    mm["event_Trddt"] = pd.to_datetime(
+        mm["event_Trddt"], errors="coerce"
+    )
+    mm["event_td"] = pd.to_numeric(
+        mm["event_td"], errors="coerce"
+    )
+    mm["td_tm3"] = mm["event_td"] - 3
+
+    # 读取个股日度市值。
+    mktcap = pd.read_csv(
+        daily_panel_path,
+        encoding="utf-8",
+        usecols=["Stkcd", "td", "size", "sizew"],
+        dtype={"Stkcd": "string"},
+    )
+
+    mktcap["Stkcd"] = mktcap["Stkcd"].apply(normalize_stock_code)
+    mktcap["td"] = pd.to_numeric(mktcap["td"], errors="coerce")
+
+    mktcap = mktcap.rename(
+        columns={
+            "td": "td_tm3",
+            "size": "mktcap_tm3",
+            "sizew": "float_mktcap_tm3",
+        }
+    )
+
+    # 同一提示公司在同一事件日可能对应多个被提示公司。
+    # 先提取需要匹配的唯一键，减少重复匹配。
+    mktcap_key = (
+        mm[["Stkcd", "td_tm3"]]
+        .drop_duplicates()
+        .merge(
+            mktcap[
+                ["Stkcd", "td_tm3", "mktcap_tm3", "float_mktcap_tm3"]
+            ],
+            how="left",
+            on=["Stkcd", "td_tm3"],
+            validate="m:1",
+        )
+    )
+
+    # 将提示公司的市值合并回每条公司对记录。
+    mm = mm.merge(
+        mktcap_key,
+        how="left",
+        on=["Stkcd", "td_tm3"],
+        validate="m:1",
+    )
+
+    print("合并事件前第三个交易日市值后行数：", len(mm))
+    print("提示公司总市值缺失数：", mm["mktcap_tm3"].isna().sum())
+    print("提示公司总市值缺失比例：", mm["mktcap_tm3"].isna().mean())
+
+    return mm
+
+
+mm = load_pattern_matrix_with_marketcap(
+    matrix_path=paths["MemoryMatrixPattern_path"],
+    daily_panel_path=paths["TRD_Dalyr_DGTW_path"],
+)
 
 # 合并市值排名数据
 
@@ -245,805 +367,1177 @@ print('t-3 总市值缺失比例：', mm['mktcap_tm3'].isna().mean())
 # 因此该处理可能引入前视偏差。为避免使用未来信息，
 # 本文在复现中改用公告日前最近一个已知月末，即上月末的市值分位数断点，作为大市值公司划分标准。
 
-marketcap_group = pd.read_csv(
-    marketcap_group_path,
-    encoding='utf-8',
-) 
+# =============================================================================
+# 合并月度市值断点并筛选缺失记录
+# =============================================================================
 
-mm["event_Trddt"] = pd.to_datetime(mm["event_Trddt"])
-marketcap_group["Trdmnt"] = pd.to_datetime(marketcap_group["Trdmnt"])
+def merge_monthly_marketcap_breakpoints(
+    mm,
+    breakpoint_path,
+    breakpoint_mode,
+):
+    """按事件月份合并市值断点，保留市值及必要断点完整的公司对记录。"""
 
-# 选择本月和上月两种模式
-if MARKETCAP_BREAKPOINT_MODE == "prev_month":
-    mm["Trdmnt_for_breakpoint"] = (
-        mm["event_Trddt"]
-        .dt.to_period("M")
-        .sub(1)
-        .dt.to_timestamp()
+    marketcap_group = pd.read_csv(
+        breakpoint_path,
+        encoding="utf-8",
     )
-elif MARKETCAP_BREAKPOINT_MODE == "same_month":
-    mm["Trdmnt_for_breakpoint"] = (
-        mm["event_Trddt"]
-        .dt.to_period("M")
-        .dt.to_timestamp()
+
+    mm["event_Trddt"] = pd.to_datetime(mm["event_Trddt"])
+    marketcap_group["Trdmnt"] = pd.to_datetime(
+        marketcap_group["Trdmnt"]
     )
-else:
-    raise ValueError("MARKETCAP_BREAKPOINT_MODE 只能是 'prev_month' 或 'same_month'")
 
-# 为避免右表 key 名混淆，先改名
-marketcap_group_merge = marketcap_group.rename(
-    columns={"Trdmnt": "Trdmnt_breakpoint"}
+    # 月份依据是提示事件交易日。
+    event_month = mm["event_Trddt"].dt.to_period("M")
+
+    if breakpoint_mode == "prev_month":
+        # 主口径：使用事件所在月份的上月断点。
+        lookup_month = event_month.sub(1)
+    elif breakpoint_mode == "same_month":
+        # 原文对照口径：使用事件所在月份的当月断点。
+        lookup_month = event_month
+    else:
+        raise ValueError(
+            "市值断点月份只能设置为 "
+            "'prev_month'（上月）或 'same_month'（当月）"
+        )
+
+    mm["Trdmnt_for_breakpoint"] = lookup_month.dt.to_timestamp()
+
+    marketcap_group_merge = marketcap_group.rename(
+        columns={"Trdmnt": "Trdmnt_breakpoint"}
+    )
+
+    # 每条公司对记录匹配一个月份；右表每个月份应只有一行。
+    mm = mm.merge(
+        marketcap_group_merge,
+        left_on="Trdmnt_for_breakpoint",
+        right_on="Trdmnt_breakpoint",
+        how="left",
+        validate="m:1",
+    )
+
+    missing_month = mm["Trdmnt_breakpoint"].isna()
+
+    print("合并月度断点后的公司对记录数：", len(mm))
+    print("未匹配到断点月份的记录数：", missing_month.sum())
+    print(
+        mm.loc[
+            missing_month,
+            ["event_Trddt", "Trdmnt_for_breakpoint"],
+        ].head()
+    )
+
+    # 保留原有筛选口径：下面四个字段任意一个缺失就删除。
+    required_columns = [
+        "mktcap_tm3",
+        "marketCap_90th_percentile",
+        "marketCap_50th_percentile",
+        "marketCap_10th_percentile",
+    ]
+
+    print("各筛选字段的缺失数：")
+    print(mm[required_columns].isna().sum())
+
+    rows_before_filter = len(mm)
+    mm = mm.dropna(subset=required_columns).copy()
+
+    print(
+        "因总市值或必要断点缺失删除的公司对记录数：",
+        rows_before_filter - len(mm),
+    )
+    print("筛选后剩余公司对记录数：", len(mm))
+
+    return mm
+
+
+mm = merge_monthly_marketcap_breakpoints(
+    mm=mm,
+    breakpoint_path=paths["marketcap_group_path"],
+    breakpoint_mode=config["MARKETCAP_BREAKPOINT_MODE"],
 )
 
-# 合并 marketcap_group 
-mm = mm.merge(
-    marketcap_group_merge,
-    left_on="Trdmnt_for_breakpoint",
-    right_on="Trdmnt_breakpoint",
-    how="left",
-    validate="m:1"
+# =============================================================================
+# 合并提示公司当前财报的盈余惊喜
+# =============================================================================
+
+def merge_current_cue_sue(mm, sue_path, report_path):
+    """通过提示公司的原公告日找到报告，再合并该报告的盈余惊喜。"""
+
+    sue = pd.read_csv(
+        sue_path,
+        encoding="utf-8",
+        usecols=["Stkcd", "Accper", "sue1", "sue2", "sue3"],
+        parse_dates=["Accper"],
+    )
+
+    sue["Stkcd"] = sue["Stkcd"].apply(normalize_stock_code)
+
+    # 用提示公司代码和原公告日，查找对应的财报截止日。
+    current_accper = pd.read_csv(
+        report_path,
+        usecols=["Stkcd", "Annodt", "Accper"],
+        parse_dates=["Annodt", "Accper"],
+        dtype={"Stkcd": "string"},
+    )
+
+    current_accper["Stkcd"] = current_accper["Stkcd"].apply(
+        normalize_stock_code
+    )
+
+    # 保留原规则：
+    # 同一公司同一公告日有多份报告时，选择最早的财报截止日。
+    current_accper = (
+        current_accper
+        .sort_values(["Stkcd", "Annodt", "Accper"])
+        .groupby(["Stkcd", "Annodt"], as_index=False)
+        .head(1)
+        .rename(columns={"Accper": "currentAccper"})
+    )
+
+    mm = mm.merge(
+        current_accper,
+        on=["Stkcd", "Annodt"],
+        how="left",
+        validate="m:1",
+    )
+
+    # 用提示公司代码和所选财报截止日匹配盈余惊喜。
+    mm = mm.merge(
+        sue,
+        left_on=["Stkcd", "currentAccper"],
+        right_on=["Stkcd", "Accper"],
+        how="left",
+        validate="m:1",
+    )
+
+    # 保留所选截止日，删除右表临时引入的同义字段。
+    mm = mm.drop(columns=["Accper"], errors="ignore")
+
+    print("合并当前盈余惊喜后的公司对记录数：", len(mm))
+    print(
+        "所选财报截止日缺失的公司对记录数：",
+        mm["currentAccper"].isna().sum(),
+    )
+    print("各盈余惊喜字段缺失的公司对记录数：")
+    print(mm[["sue1", "sue2", "sue3"]].isna().sum())
+
+    return mm
+
+
+mm = merge_current_cue_sue(
+    mm=mm,
+    sue_path=paths["sue_path"],
+    report_path=paths["IAR_Rept_path"],
 )
-
-print(mm["Trdmnt_breakpoint"].isna().sum())
-print(mm.loc[mm["Trdmnt_breakpoint"].isna(), ["event_Trddt", "Trdmnt_breakpoint"]].head())
-print("合并断点之后的行数",len(mm))
-
-# 删除市值/市值断点存在缺失值的（这里暗含了对样本的清洗）
-mm = mm.dropna(subset=[
-    "mktcap_tm3",
-    "marketCap_90th_percentile",
-    "marketCap_50th_percentile",
-    "marketCap_10th_percentile",
-]).copy()
-print("删除t-3市值或者市值断点存在缺失值的观测值后剩余的样本数",len(mm))
-
-
-
-# 合并盈余惊喜数据
-sue = pd.read_csv(
-    sue_path,
-    encoding='utf-8',
-    usecols=['Stkcd','Accper','sue1','sue2','sue3'],
-    parse_dates=['Accper']
-)
-
-sue['Stkcd'] = sue['Stkcd'].apply(normalize_stock_code)
-
-# 先找当前记忆矩阵中公告日的财报截止日，再合并
-current_accper = pd.read_csv(
-    IAR_Rept_path,
-    usecols=["Stkcd", "Annodt", "Accper"],
-    parse_dates=["Annodt", "Accper"],
-    dtype={"Stkcd": "string"}
-)
-
-current_accper["Stkcd"] = current_accper["Stkcd"].apply(normalize_stock_code)
-
-current_accper = (
-    current_accper
-    .sort_values(["Stkcd", "Annodt", "Accper"])
-    .groupby(["Stkcd", "Annodt"], as_index=False)
-    .head(1)
-    .rename(columns={"Accper": "currentAccper"})
-)# 去重
-
-mm = mm.merge(
-    current_accper,
-    on=["Stkcd", "Annodt"],
-    how="left",
-    validate="m:1"
-)
-
-mm = mm.merge(
-    sue,
-    left_on=["Stkcd", "currentAccper"],
-    right_on=["Stkcd", "Accper"],
-    how="left",
-    validate="m:1"
-)
-
-mm = mm.drop(columns=["Accper"], errors="ignore")
 
 #===============================================================================
 # 筛选符合条件的 cue-recall 公司对
 #===============================================================================
 
-mm_key = mm[['Annodt', 'event_td', 'Stkcd', 'StkcdRecall']].copy()
-mm_key['Stkcd'] = mm_key['Stkcd'].apply(normalize_stock_code)
-mm_key['StkcdRecall'] = mm_key['StkcdRecall'].apply(normalize_stock_code)
+# =============================================================================
+# 构造公司对筛选键表，并排除已识别的同行业公司对
+# =============================================================================
 
-# 排除同行业的公司对(需要先匹配行业信息)
-daily_industry = pd.read_csv(
-    industry_path,
-    encoding='utf-8',
-    usecols=['Stkcd','td','IndustryCode'],
-     dtype={'Stkcd': 'string', 'IndustryCode': 'string'}
+def filter_same_industry_pairs(mm, industry_path):
+    """匹配事件日双方行业，删除行业均已知且相同的公司对记录。"""
+
+    mm_key = mm[
+        ["Annodt", "event_td", "Stkcd", "StkcdRecall"]
+    ].copy()
+
+    mm_key["Stkcd"] = mm_key["Stkcd"].apply(normalize_stock_code)
+    mm_key["StkcdRecall"] = mm_key["StkcdRecall"].apply(
+        normalize_stock_code
+    )
+
+    daily_industry = pd.read_csv(
+        industry_path,
+        encoding="utf-8",
+        usecols=["Stkcd", "td", "IndustryCode"],
+        dtype={
+            "Stkcd": "string",
+            "IndustryCode": "string",
+        },
+    )
+
+    daily_industry["Stkcd"] = daily_industry["Stkcd"].apply(
+        normalize_stock_code
+    )
+    daily_industry["td"] = pd.to_numeric(
+        daily_industry["td"], errors="coerce"
+    )
+
+    # 保留原规则：删除缺失字段记录，再对重复键保留首条。
+    daily_industry = (
+        daily_industry
+        .dropna(subset=["Stkcd", "td", "IndustryCode"])
+        .drop_duplicates(["Stkcd", "td"])
+    )
+
+    cue_industry = daily_industry.rename(
+        columns={
+            "td": "event_td",
+            "IndustryCode": "cue_industry_code",
+        }
+    )
+
+    recall_industry = daily_industry.rename(
+        columns={
+            "Stkcd": "StkcdRecall",
+            "td": "event_td",
+            "IndustryCode": "recall_industry_code",
+        }
+    )
+
+    # 匹配提示公司在提示事件交易日的行业。
+    mm_key = mm_key.merge(
+        cue_industry[
+            ["Stkcd", "event_td", "cue_industry_code"]
+        ],
+        on=["Stkcd", "event_td"],
+        how="left",
+        validate="m:1",
+    )
+
+    # 匹配被提示公司在同一提示事件交易日的行业。
+    mm_key = mm_key.merge(
+        recall_industry[
+            ["StkcdRecall", "event_td", "recall_industry_code"]
+        ],
+        on=["StkcdRecall", "event_td"],
+        how="left",
+        validate="m:1",
+    )
+
+    industry_missing = mm_key[
+        ["cue_industry_code", "recall_industry_code"]
+    ].isna().any(axis=1)
+
+    mm_key["same_industry"] = (
+        mm_key["cue_industry_code"].notna()
+        & mm_key["recall_industry_code"].notna()
+        & (
+            mm_key["cue_industry_code"]
+            == mm_key["recall_industry_code"]
+        )
+    )
+
+    print("同行业过滤前公司对记录数：", len(mm_key))
+    print("至少一方行业缺失的记录数：", industry_missing.sum())
+    print("同行业公司对记录数：", mm_key["same_industry"].sum())
+    print("同行业公司对记录比例：", mm_key["same_industry"].mean())
+
+    mm_key = mm_key.loc[~mm_key["same_industry"]].copy()
+
+    print("同行业过滤后公司对记录数：", len(mm_key))
+
+    return mm_key
+
+
+mm_key = filter_same_industry_pairs(
+    mm=mm,
+    industry_path=paths["industry_path"],
 )
-
-daily_industry['Stkcd'] = daily_industry['Stkcd'].apply(normalize_stock_code)
-daily_industry['td'] = pd.to_numeric(daily_industry['td'], errors='coerce')
-
-daily_industry = (
-    daily_industry
-    .dropna(subset=['Stkcd', 'td', 'IndustryCode'])
-    .drop_duplicates(['Stkcd', 'td'])
-)
-
-cue_industry = daily_industry.rename(columns={
-    'td': 'event_td',
-    'IndustryCode': 'cue_industry_code'
-})
-
-recall_industry = daily_industry.rename(columns={
-    'Stkcd': 'StkcdRecall',
-    'td': 'event_td',
-    'IndustryCode': 'recall_industry_code'
-})
-
-mm_key = mm_key.merge(
-    cue_industry[['Stkcd', 'event_td', 'cue_industry_code']],
-    on=['Stkcd', 'event_td'],
-    how='left',
-    validate='m:1'
-)# 合并提示公司的行业
-
-mm_key = mm_key.merge(
-    recall_industry[['StkcdRecall', 'event_td', 'recall_industry_code']],
-    on=['StkcdRecall', 'event_td'],
-    how='left',
-    validate='m:1'
-)# 合并被提示公司的行业
-
-mm_key['same_industry'] = (
-    mm_key['cue_industry_code'].notna()
-    & mm_key['recall_industry_code'].notna()
-    & (mm_key['cue_industry_code'] == mm_key['recall_industry_code'])
-)
-
-print('同行业公司对数量：', mm_key['same_industry'].sum())
-print('同行业公司对比例：', mm_key['same_industry'].mean())
-
-mm_key = mm_key.loc[~mm_key['same_industry']].copy()
 
 # 删除上下游垂直相关公司对
 #（这里仅排除一级供应链关系，后续如果需要的话还可以排除二级供应链关系作为稳健性检验）
 
-mm_key['yearCue'] = mm_key['Annodt'].dt.year
+# =============================================================================
+# 排除已识别的一级供应链公司对
+# =============================================================================
 
-SC_NetWorkRelationsIndex = pd.read_csv(
-    SC_NetWorkRelationsIndex_path,
-    encoding='utf-8',
-    usecols=[
-        'Symbol',
-        'EndDate',
-        'StateTypeCode',
-        'PSCBusinessRelation',
-        'PSCSymbol'
-    ],
-    dtype={
-        'Symbol': 'string',
-        'StateTypeCode': 'string',
-        'PSCBusinessRelation': 'string',
-        'PSCSymbol': 'string',
-    },    
-    parse_dates=['EndDate']
-)
+def filter_supply_chain_pairs(mm_key, supply_chain_path):
+    """按原公告年份匹配供应链关系，排除任一方向存在关系的公司对。"""
 
-# 一级供应链字段：每一行都有
-# 二级供应链字段：只有部分行有
+    mm_key["yearCue"] = mm_key["Annodt"].dt.year
 
-SC_NetWorkRelationsIndex['yearCue'] = SC_NetWorkRelationsIndex['EndDate'].dt.year
+    SC_NetWorkRelationsIndex = pd.read_csv(
+        supply_chain_path,
+        encoding="utf-8",
+        usecols=[
+            "Symbol",
+            "EndDate",
+            "StateTypeCode",
+            "PSCBusinessRelation",
+            "PSCSymbol",
+        ],
+        dtype={
+            "Symbol": "string",
+            "StateTypeCode": "string",
+            "PSCBusinessRelation": "string",
+            "PSCSymbol": "string",
+        },
+        parse_dates=["EndDate"],
+    )
 
-SC_NetWorkRelationsIndex['Symbol']=SC_NetWorkRelationsIndex['Symbol'].apply(normalize_stock_code)
-# 其实这里已经都是6位数字代码 
+    SC_NetWorkRelationsIndex["yearCue"] = (
+        SC_NetWorkRelationsIndex["EndDate"].dt.year
+    )
+    SC_NetWorkRelationsIndex["Symbol"] = (
+        SC_NetWorkRelationsIndex["Symbol"].apply(
+            normalize_stock_code
+        )
+    )
 
-is_a_share_pair = (
-    SC_NetWorkRelationsIndex['StateTypeCode'].eq('1') # 筛选出合并报表
-    & SC_NetWorkRelationsIndex['PSCSymbol'].str.fullmatch(r'[0368][0-9]{5}', na=False)
-    # 排除美股、港股市场的（这里不能进行6位数字填充标准化，因为5位数的是港股）
-    & SC_NetWorkRelationsIndex['PSCBusinessRelation'].isin(['1', '2']) 
-    # 实际也只有这两个取值
-) # 筛选出A股中合并报表的数据
+    # 保留原筛选规则。
+    # 关联方代码先按原始六位格式筛选，避免补零纳入其它市场代码。
+    is_a_share_pair = (
+        SC_NetWorkRelationsIndex["StateTypeCode"].eq("1")
+        & SC_NetWorkRelationsIndex["PSCSymbol"].str.fullmatch(
+            r"[0368][0-9]{5}", na=False
+        )
+        & SC_NetWorkRelationsIndex["PSCBusinessRelation"].isin(
+            ["1", "2"]
+        )
+    )
 
-supply_chain = SC_NetWorkRelationsIndex.loc[is_a_share_pair].copy()
+    supply_chain = SC_NetWorkRelationsIndex.loc[
+        is_a_share_pair
+    ].copy()
 
-# 转化为有向关系
-# PSCBusinessRelation == 1: Symbol 的客户是 PSCSymbol，所以 Symbol -> PSCSymbol
-# PSCBusinessRelation == 2: Symbol 的供应商是 PSCSymbol，所以 PSCSymbol -> Symbol
+    # 沿用原脚本的方向转换规则。
+    supply_chain["upstream_stkcd"] = np.where(
+        supply_chain["PSCBusinessRelation"].eq("1"),
+        supply_chain["Symbol"],
+        supply_chain["PSCSymbol"],
+    )
 
-supply_chain['upstream_stkcd'] = np.where(
-    supply_chain['PSCBusinessRelation'].eq('1'),
-    supply_chain['Symbol'],
-    supply_chain['PSCSymbol']
-)
+    supply_chain["downstream_stkcd"] = np.where(
+        supply_chain["PSCBusinessRelation"].eq("1"),
+        supply_chain["PSCSymbol"],
+        supply_chain["Symbol"],
+    )
 
-supply_chain['downstream_stkcd'] = np.where(
-    supply_chain['PSCBusinessRelation'].eq('1'),
-    supply_chain['PSCSymbol'],
-    supply_chain['Symbol']
-) 
+    # 删除自身配对，并对年度有向关系去重。
+    supply_chain = supply_chain.loc[
+        supply_chain["upstream_stkcd"]
+        != supply_chain["downstream_stkcd"],
+        ["yearCue", "upstream_stkcd", "downstream_stkcd"],
+    ].drop_duplicates()
 
-supply_chain = supply_chain.loc[
-    supply_chain['upstream_stkcd'] != supply_chain['downstream_stkcd'],
-    ['yearCue', 'upstream_stkcd', 'downstream_stkcd']
-].drop_duplicates() # 删除自己和自己是上下游的配对，其实合并报表中并没有这种情况（母公司报表中有一条）
+    # 任一方向有关系，就同时生成两个匹配方向。
+    vertical_pairs_forward = supply_chain.rename(
+        columns={
+            "upstream_stkcd": "Stkcd",
+            "downstream_stkcd": "StkcdRecall",
+        }
+    )[["yearCue", "Stkcd", "StkcdRecall"]]
 
+    vertical_pairs_reverse = supply_chain.rename(
+        columns={
+            "downstream_stkcd": "Stkcd",
+            "upstream_stkcd": "StkcdRecall",
+        }
+    )[["yearCue", "Stkcd", "StkcdRecall"]]
 
-# 只要 A 和 B 任一方向存在供应链关系，就同时生成 A-B 和 B-A 两条可匹配记录。
-vertical_pairs_forward = supply_chain.rename(columns={
-    'upstream_stkcd': 'Stkcd',
-    'downstream_stkcd': 'StkcdRecall'
-})[['yearCue', 'Stkcd', 'StkcdRecall']]
+    vertical_pairs = (
+        pd.concat(
+            [vertical_pairs_forward, vertical_pairs_reverse],
+            ignore_index=True,
+        )
+        .drop_duplicates()
+        .assign(vertical_related=1)
+    )
 
-vertical_pairs_reverse = supply_chain.rename(columns={
-    'downstream_stkcd': 'Stkcd',
-    'upstream_stkcd': 'StkcdRecall'
-})[['yearCue', 'Stkcd', 'StkcdRecall']]
+    mm_key = mm_key.merge(
+        vertical_pairs,
+        on=["yearCue", "Stkcd", "StkcdRecall"],
+        how="left",
+        validate="m:1",
+    )
 
-vertical_pairs = (
-    pd.concat([vertical_pairs_forward, vertical_pairs_reverse], ignore_index=True)
-    .drop_duplicates()
-    .assign(vertical_related=1)
-)
+    is_related = mm_key["vertical_related"].eq(1)
 
-mm_key = mm_key.merge(
-    vertical_pairs,
-    on=['yearCue', 'Stkcd', 'StkcdRecall'],
-    how='left',
-    validate='m:1'# 同一对公司可能在同一年有很多公告日
-) 
+    print("供应链过滤前公司对记录数：", len(mm_key))
+    print("已识别的供应链公司对记录数：", is_related.sum())
+    print("已识别的供应链公司对记录比例：", is_related.mean())
+    print("双向公司对×年度查找表记录数：", len(vertical_pairs))
 
-print('上下游垂直相关公司对数量：', mm_key['vertical_related'].eq(1).sum())
-print('上下游垂直相关公司对比例：', mm_key['vertical_related'].eq(1).mean())
-print('供应链关系公司对-年度数：', len(vertical_pairs))
-print(vertical_pairs.head())
-print(mm_key.loc[
-    mm_key['vertical_related'].eq(1),
-    ['Annodt', 'yearCue', 'Stkcd', 'StkcdRecall']
-].head(20))
+    # 保留未匹配到供应链关系的记录。
+    mm_key = mm_key.loc[
+        mm_key["vertical_related"].isna()
+    ].copy()
 
-mm_key = mm_key.loc[mm_key['vertical_related'].isna()].copy()
-
-mm_key = mm_key.drop(
-    columns=['yearCue', 'vertical_related'],
-    errors='ignore'
-)
-
-# 删除有共同分析师覆盖的公司对
-id_mode_folder = {
-    'split': '拆开AnanmID',
-    'team': '不拆开AnanmID',
-}
-
-if ANALYST_ID_MODE not in id_mode_folder:
-    raise ValueError("ANALYST_ID_MODE 只能是 'split' 或 'team'")
-
-analyst_overlap_path = (
-    ANALYST_OVERLAP_ROOT
-    / id_mode_folder[ANALYST_ID_MODE]
-    / f'Pattern样本_分析师共同覆盖_滚动{ANALYST_LOOKBACK_DAYS}天.csv'
-)
-
-analyst_overlap = pd.read_csv(
-    analyst_overlap_path,
-    encoding='utf-8-sig',
-    usecols=[
-        'Annodt',
-        'Stkcd',
-        'StkcdRecall',
-        'same_analyst_overlap',
-        'n_common_analysts',
-    ],
-    dtype={
-        'Stkcd': 'string',
-        'StkcdRecall': 'string',
-        'same_analyst_overlap': 'Int64',
-        'n_common_analysts': 'Int64',
-    },
-    parse_dates=['Annodt']
-)
-
-analyst_overlap['Stkcd'] = analyst_overlap['Stkcd'].apply(normalize_stock_code)
-analyst_overlap['StkcdRecall'] = analyst_overlap['StkcdRecall'].apply(normalize_stock_code)
-
-analyst_overlap = (
-    analyst_overlap
-    .drop_duplicates(['Annodt', 'Stkcd', 'StkcdRecall'])
-)
-
-mm_key = mm_key.merge(
-    analyst_overlap,
-    on=['Annodt', 'Stkcd', 'StkcdRecall'],
-    how='left',
-    validate='m:1'
-)
-
-analyst_overlap_count = mm_key['same_analyst_overlap'].notna().sum()
-analyst_overlap_ratio = mm_key['same_analyst_overlap'].notna().mean()
-
-print('分析师共同覆盖公司对数量：', analyst_overlap_count)
-print('分析师共同覆盖公司对比例：', analyst_overlap_ratio)
-
-if DROP_ANALYST_OVERLAP:
-    mm_key = mm_key.loc[mm_key['same_analyst_overlap'].isna()].copy()
     mm_key = mm_key.drop(
-        columns=['same_analyst_overlap', 'n_common_analysts'],
-        errors='ignore'
-    )
-else:
-    mm_key['same_analyst_overlap'] = (
-        mm_key['same_analyst_overlap']
-        .fillna(0)
-        .astype('int8')
-    )
-    mm_key['n_common_analysts'] = (
-        mm_key['n_common_analysts']
-        .fillna(0)
-        .astype('int16')
+        columns=["yearCue", "vertical_related"],
+        errors="ignore",
     )
 
+    print("供应链过滤后公司对记录数：", len(mm_key))
 
-# 用剩余的键去删选原表
-key_cols = ['Annodt', 'Stkcd', 'StkcdRecall']
+    return mm_key
 
-mm_key_keep = mm_key[key_cols].drop_duplicates()
 
-duplicate_count = mm_key_keep.duplicated(key_cols).sum()
-print('筛选键重复数：', duplicate_count)
-
-n_before = len(mm)
-
-mm = mm.merge(
-    mm_key_keep,
-    on=key_cols,
-    how='inner',
-    validate='1:1'
+mm_key = filter_supply_chain_pairs(
+    mm_key=mm_key,
+    supply_chain_path=paths["SC_NetWorkRelationsIndex_path"],
 )
 
-print('筛选前样本数：', n_before)
-print('筛选后样本数：', len(mm))
-print('删除的不合格公司对数量：', n_before - len(mm))
+# =============================================================================
+# 合并共同分析师覆盖，并按开关过滤公司对
+# =============================================================================
 
+def filter_analyst_overlap_pairs(
+    mm_key,
+    overlap_root,
+    id_mode,
+    lookback_days,
+    drop_overlap,
+):
+    """读取已有共同分析师覆盖结果，并按原规则处理公司对。"""
+
+    id_mode_folder = {
+        "split": "拆开AnanmID",
+        "team": "不拆开AnanmID",
+    }
+
+    if id_mode not in id_mode_folder:
+        raise ValueError(
+            "分析师识别方式只能是 "
+            "'split'（个人）或 'team'（团队字符串）"
+        )
+
+    analyst_overlap_path = (
+        Path(overlap_root)
+        / id_mode_folder[id_mode]
+        / f"Pattern样本_分析师共同覆盖_滚动{lookback_days}天.csv"
+    )
+
+    analyst_overlap = pd.read_csv(
+        analyst_overlap_path,
+        encoding="utf-8-sig",
+        usecols=[
+            "Annodt",
+            "Stkcd",
+            "StkcdRecall",
+            "same_analyst_overlap",
+            "n_common_analysts",
+        ],
+        dtype={
+            "Stkcd": "string",
+            "StkcdRecall": "string",
+            "same_analyst_overlap": "Int64",
+            "n_common_analysts": "Int64",
+        },
+        parse_dates=["Annodt"],
+    )
+
+    analyst_overlap["Stkcd"] = analyst_overlap["Stkcd"].apply(
+        normalize_stock_code
+    )
+    analyst_overlap["StkcdRecall"] = (
+        analyst_overlap["StkcdRecall"].apply(normalize_stock_code)
+    )
+
+    # 保留原规则：同一匹配键重复时保留首条。
+    analyst_overlap = analyst_overlap.drop_duplicates(
+        ["Annodt", "Stkcd", "StkcdRecall"]
+    )
+
+    mm_key = mm_key.merge(
+        analyst_overlap,
+        on=["Annodt", "Stkcd", "StkcdRecall"],
+        how="left",
+        validate="m:1",
+    )
+
+    # 来源表只保存存在共同覆盖的公司对。
+    # 沿用原判断：标记非缺失，视为匹配到了共同覆盖记录。
+    matched_overlap = mm_key["same_analyst_overlap"].notna()
+
+    print("共同分析师覆盖文件：", analyst_overlap_path)
+    print("分析师过滤前公司对记录数：", len(mm_key))
+    print("匹配到共同覆盖的记录数：", matched_overlap.sum())
+    print("匹配到共同覆盖的记录比例：", matched_overlap.mean())
+
+    if drop_overlap:
+        mm_key = mm_key.loc[
+            mm_key["same_analyst_overlap"].isna()
+        ].copy()
+
+        mm_key = mm_key.drop(
+            columns=["same_analyst_overlap", "n_common_analysts"],
+            errors="ignore",
+        )
+    else:
+        mm_key["same_analyst_overlap"] = (
+            mm_key["same_analyst_overlap"]
+            .fillna(0)
+            .astype("int8")
+        )
+        mm_key["n_common_analysts"] = (
+            mm_key["n_common_analysts"]
+            .fillna(0)
+            .astype("int16")
+        )
+
+    print("分析师过滤后公司对记录数：", len(mm_key))
+
+    return mm_key
+
+
+mm_key = filter_analyst_overlap_pairs(
+    mm_key=mm_key,
+    overlap_root=ANALYST_OVERLAP_ROOT,
+    id_mode=config["ANALYST_ID_MODE"],
+    lookback_days=config["ANALYST_LOOKBACK_DAYS"],
+    drop_overlap=config["DROP_ANALYST_OVERLAP"],
+)
+
+
+# =============================================================================
+# 将合格公司对名单应用到完整记忆矩阵
+# =============================================================================
+
+def apply_pair_filters(mm, mm_key):
+    """按原公告日和公司对，保留通过各轮过滤的完整记录。"""
+
+    key_cols = ["Annodt", "Stkcd", "StkcdRecall"]
+
+    # 在去重之前统计，才能看出原筛选键表是否有重复。
+    duplicate_count = mm_key.duplicated(key_cols).sum()
+    print("去重前多出的重复筛选键记录数：", duplicate_count)
+
+    mm_key_keep = mm_key[key_cols].drop_duplicates()
+    print("去重后的合格筛选键数量：", len(mm_key_keep))
+
+    rows_before_filter = len(mm)
+
+    # 只使用名单筛选行，完整矩阵中的变量继续保留。
+    mm = mm.merge(
+        mm_key_keep,
+        on=key_cols,
+        how="inner",
+        validate="1:1",
+    )
+
+    print("应用公司对过滤前记录数：", rows_before_filter)
+    print("应用公司对过滤后记录数：", len(mm))
+    print(
+        "三轮公司对过滤合计删除记录数：",
+        rows_before_filter - len(mm),
+    )
+
+    return mm
+
+
+mm = apply_pair_filters(
+    mm=mm,
+    mm_key=mm_key,
+)
 
 #===============================================================================
 # 构造 cue dummy: 大公司cue、强记忆cue
 #===============================================================================
 
-# 按照提示公司 Stkcd 的公告日前市值分位点生成规模分组虚拟变量
-mm["size90plus"] = (
-    mm["mktcap_tm3"] > mm["marketCap_90th_percentile"]
-).astype(int)
+def add_size_groups_and_basic_cues(mm):
+    """划分提示公司的规模组，并构造季度关系与规模组的交互变量。"""
 
-mm["size50_90"] = (
-    (mm["mktcap_tm3"] > mm["marketCap_50th_percentile"])
-    & (mm["mktcap_tm3"] <= mm["marketCap_90th_percentile"])
-).astype(int)
+    # 使用已经并入的提示公司总市值和月度分位点。
+    mm["size90plus"] = (
+        mm["mktcap_tm3"] > mm["marketCap_90th_percentile"]
+    ).astype(int)
 
-mm["size10_50"] = (
-    (mm["mktcap_tm3"] >= mm["marketCap_10th_percentile"])
-    & (mm["mktcap_tm3"] <= mm["marketCap_50th_percentile"])
-).astype(int)
+    mm["size50_90"] = (
+        (mm["mktcap_tm3"] > mm["marketCap_50th_percentile"])
+        & (mm["mktcap_tm3"] <= mm["marketCap_90th_percentile"])
+    ).astype(int)
 
-mm["size10minus"] = (
-    mm["mktcap_tm3"] < mm["marketCap_10th_percentile"]
-).astype(int)
+    mm["size10_50"] = (
+        (mm["mktcap_tm3"] >= mm["marketCap_10th_percentile"])
+        & (mm["mktcap_tm3"] <= mm["marketCap_50th_percentile"])
+    ).astype(int)
 
-# 已经检查都没有缺失值，可以相乘构造虚拟变量
+    mm["size10minus"] = (
+        mm["mktcap_tm3"] < mm["marketCap_10th_percentile"]
+    ).astype(int)
 
-# 生成大市值cue
-MAX_LAG = 1   # 只生成 lag1；如果想生成 lag1-lag4，改成 4
+    # 当前构造和后续汇总均使用上一季度关系。
+    max_lag = 1
 
-for i in range(1, MAX_LAG + 1):
-
-    lag_col = f"quarterLag{i}Alt"
-
-    # 如果当前表里没有这个 lag 变量，就跳过
-    if lag_col not in mm.columns:
-        print(f"跳过：{lag_col} 不在当前表中")
-        continue
-
-    # 主 cue：第 i 期共同公告记忆 × 大市值提示公司
-    mm[f"quarterLag{i}size90plus"] = (
-        mm[lag_col] * mm["size90plus"]
-    ).astype("int8")
-
-    # 其他规模组 cue
-    mm[f"quarterLag{i}size50_90"] = (
-        mm[lag_col] * mm["size50_90"]
-    ).astype("int8")
-
-    mm[f"quarterLag{i}size10_50"] = (
-        mm[lag_col] * mm["size10_50"]
-    ).astype("int8")
-
-    mm[f"quarterLag{i}size10minus"] = (
-        mm[lag_col] * mm["size10minus"]
-    ).astype("int8")
-
-# ============================================================
-# 生成 attention / volume × size 的强记忆 cue
-# ============================================================
-
-MAX_LAG = 1
-
-size_groups = [
-    "size90plus",
-    "size50_90",
-]
-attention_volume_suffixes = [
-    "hiAEV",
-    "hiavol",
-    "hiavolS",
-]
-
-for i in range(1, MAX_LAG + 1):
-    for size in size_groups:
-        for suffix in attention_volume_suffixes:
-            src = f"lag{i}{suffix}"
-            dst = f"lag{i}{suffix}{size}"
-
-            if src in mm.columns and size in mm.columns:
-                mm[dst] = (mm[src] * mm[size]).astype("int8")
-
-# ============================================================
-# 生成 SUE / 盈余惊喜 × size 的强记忆 cue
-# ============================================================
-
-sue_suffixes = [
-    "hi_sue1_abs",
-    "hi_sue2_abs",
-    "hi_sue3_abs",
-    "sue1pos",
-    "sue2pos",
-    "sue3pos",
-    "sue1neg",
-    "sue2neg",
-    "sue3neg",
-# 双方同为极端正向 / 极端负向 SUE（盈余惊喜）
-    "hi_sue1_pos",
-    "hi_sue2_pos",
-    "hi_sue3_pos",
-    "hi_sue1_neg",
-    "hi_sue2_neg",
-    "hi_sue3_neg",
-]
-
-for i in range(1, MAX_LAG + 1):
-    for size in size_groups:
-        for suffix in sue_suffixes:
-            src = f"lag{i}{suffix}"
-            dst = f"lag{i}{suffix}{size}"
-
-            if src in mm.columns and size in mm.columns:
-                mm[dst] = (mm[src] * mm[size]).astype("int8")
-
-# ============================================================
-# 生成 topMover × size 的强记忆 cue
-# ============================================================
-
-for i in range(1, MAX_LAG + 1):
-    for size in size_groups:
-        src = f"lag{i}topMover"
-        dst = f"lag{i}topMover{size}"
-
-        if src in mm.columns and size in mm.columns:
-            mm[dst] = (mm[src] * mm[size]).astype("int8")
-
-# ============================================================
-# 计算大市值 cue 的盈余惊喜及市值加权盈余惊喜
-# ============================================================
-
-MAX_LAG = 1
-
-for sue_col in ["sue1", "sue2", "sue3"]:
-    for i in range(1, MAX_LAG + 1):
+    for i in range(1, max_lag + 1):
         lag_col = f"quarterLag{i}Alt"
 
-        mm[f"{sue_col}Lag{i}S90p"] = (
-            mm[sue_col] * mm[lag_col] * mm["size90plus"]
-        )
+        if lag_col not in mm.columns:
+            print(f"跳过：{lag_col} 不在当前表中")
+            continue
 
-        mm[f"{sue_col}Lag{i}XmarketCapS90p"] = (
-            mm[sue_col] * mm[lag_col] * mm["mktcap_tm3"] * mm["size90plus"]
-        )
+        mm[f"quarterLag{i}size90plus"] = (
+            mm[lag_col] * mm["size90plus"]
+        ).astype("int8")
 
-# 为每一种 SUE 单独记录非缺失 cue 数量和相应市值。
-# 这些分母只在 SUE_DENOMINATOR_MODE == "nonmissing_sue" 时使用。
-mm = add_sue_denominator_inputs(mm)
+        mm[f"quarterLag{i}size50_90"] = (
+            mm[lag_col] * mm["size50_90"]
+        ).astype("int8")
 
-# ============================================================
-# 保存不同规模 cue 的市值，用于后续市值加权
-# 如果这一行是“大市值 lag1 cue”，就保留 cue 公司的市值；否则记为 0。
-# ============================================================
+        mm[f"quarterLag{i}size10_50"] = (
+            mm[lag_col] * mm["size10_50"]
+        ).astype("int8")
 
-for i in range(1, MAX_LAG + 1):
-    mm[f"marketCap_Minus3Lag{i}S90p"] = (
-        mm["mktcap_tm3"] * mm[f"quarterLag{i}size90plus"]
-    )
+        mm[f"quarterLag{i}size10minus"] = (
+            mm[lag_col] * mm["size10minus"]
+        ).astype("int8")
 
-    mm[f"marketCap_Minus3Lag{i}S5090"] = (
-        mm["mktcap_tm3"] * mm[f"quarterLag{i}size50_90"]
-    )
-# ============================================================
-# 计算不同规模 cue 对应的共同公告公司数量
-# ============================================================
-
-for i in range(1, MAX_LAG + 1):
-    nr_col = f"nrFirmsAnnLag{i}Alt" # 上i季度那次共同公告记忆形成时，当天一共有多少家公司同时公告。
-
-    mm[f"nrFirmsAnnLag{i}S90p"] = (
-        mm[nr_col] * mm["size90plus"]
-    )
-# 如果当前 cue 公司是大市值（前10%）公司，就保留它对应的历史共同公告数量；
-# 如果当前 cue 公司不是大市值公司，就记为 0。
+    return mm
 
 
-    mm[f"nrFirmsAnnLag{i}S5090"] = (
-        mm[nr_col] * mm["size50_90"]
-    )
+mm = add_size_groups_and_basic_cues(mm)
 
 # ============================================================
-# 4. 计算市值加权的共同公告公司数量
+# 构造历史机制标记与提示公司规模组的交互变量
 # ============================================================
 
-for i in range(1, MAX_LAG + 1):
-    nr_col = f"nrFirmsAnnLag{i}Alt"
+def add_strong_memory_cues(mm, top_mover_mode="any"):
+    """将已有的上一季度历史机制标记与当前提示公司规模组相乘。"""
 
-    mm[f"nrFirmsAnnLag{i}XmarketCapS90p"] = (
-        mm[nr_col] * mm["mktcap_tm3"] * mm["size90plus"]
-    ) # 大公司前10%市值加总
+    max_lag = 1
 
-    mm[f"nrFirmsAnnLag{i}XmarketCapS5090"] = (
-        mm[nr_col] * mm["mktcap_tm3"] * mm["size50_90"]
-    )
-# ============================================================
-# 5. 保存 collapse 前样本
-# ============================================================
-
-sort_cols = [
-    "Stkcd",
-    "Annodt",
-    "StkcdRecall",
-]
-
-sort_cols_existing = [c for c in sort_cols if c in mm.columns]
-
-mm = mm.sort_values(sort_cols_existing).reset_index(drop=True)
-
-# 后续提示公司数量统计只需这一张精简配对表，避免长期保留完整记忆矩阵。
-cue_pairs = (
-    mm.loc[
-        mm["quarterLag1size90plus"].eq(1),
-        ["Stkcd", "event_Trddt", "StkcdRecall"]
+    size_groups = [
+        "size90plus",
+        "size50_90",
     ]
-    .rename(columns={"event_Trddt": "Trddt"})
-    .dropna(subset=["Stkcd", "StkcdRecall", "Trddt"])
-    .drop_duplicates(["Stkcd", "Trddt", "StkcdRecall"])
-    .copy()
+
+    # 一、历史注意力和成交量标记与规模组交互。
+    attention_volume_suffixes = [
+        "hiAEV",
+        "hiavol",
+        "hiavolS",
+    ]
+
+    for i in range(1, max_lag + 1):
+        for size in size_groups:
+            for suffix in attention_volume_suffixes:
+                src = f"lag{i}{suffix}"
+                dst = f"lag{i}{suffix}{size}"
+
+                if src in mm.columns and size in mm.columns:
+                    mm[dst] = (
+                        mm[src] * mm[size]
+                    ).astype("int8")
+
+    # 二、历史盈余惊喜标记与规模组交互。
+    sue_suffixes = [
+        "hi_sue1_abs",
+        "hi_sue2_abs",
+        "hi_sue3_abs",
+        "sue1pos",
+        "sue2pos",
+        "sue3pos",
+        "sue1neg",
+        "sue2neg",
+        "sue3neg",
+        # 双方同为极端正向或极端负向盈余惊喜。
+        "hi_sue1_pos",
+        "hi_sue2_pos",
+        "hi_sue3_pos",
+        "hi_sue1_neg",
+        "hi_sue2_neg",
+        "hi_sue3_neg",
+    ]
+
+    for i in range(1, max_lag + 1):
+        for size in size_groups:
+            for suffix in sue_suffixes:
+                src = f"lag{i}{suffix}"
+                dst = f"lag{i}{suffix}{size}"
+
+                if src in mm.columns and size in mm.columns:
+                    mm[dst] = (
+                        mm[src] * mm[size]
+                    ).astype("int8")
+
+    # 三、按所选历史价格异动口径，与规模组交互。
+    top_mover_sources = {
+        "any": "anyTopMover",
+        "both": "topMover",
+    }
+    top_mover_labels = {
+        "any": "任意一家进入价格异动组",
+        "both": "两家公司同时进入价格异动组",
+    }
+
+    if top_mover_mode not in top_mover_sources:
+        raise ValueError(
+            "历史价格异动口径只能设置为 any（任意一家）"
+            "或 both（两家同时）"
+        )
+
+    source_suffix = top_mover_sources[top_mover_mode]
+
+    for i in range(1, max_lag + 1):
+        src = f"lag{i}{source_suffix}"
+
+        # 所选口径缺少来源列时明确报错，避免静默跳过。
+        if src not in mm.columns:
+            raise ValueError(
+                f"所选价格异动口径缺少来源列：{src}，"
+                "请检查上游记忆矩阵。"
+            )
+
+        for size in size_groups:
+            # 输出列名保持统一，具体含义由所选口径决定。
+            dst = f"lag{i}topMover{size}"
+
+            if size in mm.columns:
+                mm[dst] = (
+                    mm[src] * mm[size]
+                ).astype("int8")
+
+    print(
+        "历史价格异动口径：",
+        top_mover_labels[top_mover_mode],
+    )
+
+    return mm
+
+
+mm = add_strong_memory_cues(
+    mm=mm,
+    top_mover_mode=config["TOP_MOVER_MODE"],
 )
 
+# ============================================================
+# 准备大市值提示事件的盈余惊喜分子及有效分母输入
+# ============================================================
+
+def add_sue_cue_inputs(mm):
+    """准备三种当前盈余惊喜的加总分子及非缺失分母输入。"""
+
+    max_lag = 1
+
+    for sue_col in ["sue1", "sue2", "sue3"]:
+        for i in range(1, max_lag + 1):
+            lag_col = f"quarterLag{i}Alt"
+
+            # 等权平均所需的逐行分子。
+            mm[f"{sue_col}Lag{i}S90p"] = (
+                mm[sue_col]
+                * mm[lag_col]
+                * mm["size90plus"]
+            )
+
+            # 市值加权平均所需的逐行分子。
+            mm[f"{sue_col}Lag{i}XmarketCapS90p"] = (
+                mm[sue_col]
+                * mm[lag_col]
+                * mm["mktcap_tm3"]
+                * mm["size90plus"]
+            )
+
+    # 始终准备各自的非缺失提示数量和有效市值。
+    # 后续聚合并计算平均时，再按配置选择分母口径。
+    mm = add_sue_denominator_inputs(mm)
+
+    return mm
+
+
+mm = add_sue_cue_inputs(mm)
+# ============================================================
+# 准备市值分母和历史共同公告数量分子
+# ============================================================
+
+def add_marketcap_and_interference_inputs(mm):
+    """准备两个规模组的市值及历史共同公告数量汇总输入。"""
+
+    max_lag = 1
+
+    # 一、提示公司市值：供后续市值加权平均作分母。
+    for i in range(1, max_lag + 1):
+        mm[f"marketCap_Minus3Lag{i}S90p"] = (
+            mm["mktcap_tm3"]
+            * mm[f"quarterLag{i}size90plus"]
+        )
+
+        mm[f"marketCap_Minus3Lag{i}S5090"] = (
+            mm["mktcap_tm3"]
+            * mm[f"quarterLag{i}size50_90"]
+        )
+
+    # 二、历史共同公告数量：供后续等权平均作分子。
+    # 来源变量已包含对应季度的关系条件。
+    for i in range(1, max_lag + 1):
+        nr_col = f"nrFirmsAnnLag{i}Alt"
+
+        mm[f"nrFirmsAnnLag{i}S90p"] = (
+            mm[nr_col] * mm["size90plus"]
+        )
+
+        mm[f"nrFirmsAnnLag{i}S5090"] = (
+            mm[nr_col] * mm["size50_90"]
+        )
+
+    # 三、历史数量乘提示公司市值：供市值加权平均作分子。
+    for i in range(1, max_lag + 1):
+        nr_col = f"nrFirmsAnnLag{i}Alt"
+
+        mm[f"nrFirmsAnnLag{i}XmarketCapS90p"] = (
+            mm[nr_col]
+            * mm["mktcap_tm3"]
+            * mm["size90plus"]
+        )
+
+        mm[f"nrFirmsAnnLag{i}XmarketCapS5090"] = (
+            mm[nr_col]
+            * mm["mktcap_tm3"]
+            * mm["size50_90"]
+        )
+
+    return mm
+
+
+mm = add_marketcap_and_interference_inputs(mm)
+# ============================================================
+# 聚合前排序，并提取基准大市值提示配对表
+# ============================================================
+
+def prepare_pattern_cue_pairs(mm):
+    """返回排序后的完整矩阵，以及供后续统计使用的精简配对表。"""
+
+    sort_cols = [
+        "Stkcd",
+        "Annodt",
+        "StkcdRecall",
+    ]
+
+    sort_cols_existing = [
+        col for col in sort_cols
+        if col in mm.columns
+    ]
+
+    mm = (
+        mm.sort_values(sort_cols_existing)
+        .reset_index(drop=True)
+    )
+
+    # 只提取上一季度关系成立的大市值提示配对。
+    cue_pairs = (
+        mm.loc[
+            mm["quarterLag1size90plus"].eq(1),
+            ["Stkcd", "event_Trddt", "StkcdRecall"],
+        ]
+        .rename(columns={"event_Trddt": "Trddt"})
+        .dropna(subset=["Stkcd", "StkcdRecall", "Trddt"])
+        .drop_duplicates(["Stkcd", "Trddt", "StkcdRecall"])
+        .copy()
+    )
+
+    return mm, cue_pairs
+
+
+mm, cue_pairs = prepare_pattern_cue_pairs(mm)
 # ============================================================
 # Collapse data
 # 当前 mm 层级：Stkcd × event_Trddt × StkcdRecall
 # 目标层级：StkcdRecall × event_Trddt
 # ============================================================
 
-df = mm.copy()
 
-group_keys = ["StkcdRecall", "event_Trddt"]
+# ============================================================
+# 构造提示事件的聚合规则
+# ============================================================
 
-# 1. 排序
-df = df.sort_values(
-    ["StkcdRecall", "event_Trddt", "mktcap_tm3", "Stkcd"]
-).reset_index(drop=True)
+def build_pattern_cue_agg_specs(data_columns):
+    """根据输入字段，构造求和与最大值聚合规则。"""
 
-# 2. sum 聚合规则
-agg_dict = {
-    # cue 数量
-    "nrCuesLag1S90p": ("quarterLag1size90plus", "sum"),
-    "nrCuesLag1S5090": ("quarterLag1size50_90", "sum"),
-    "nrCuesLag1S1050": ("quarterLag1size10_50", "sum"),
-    "nrCuesLag1S10m": ("quarterLag1size10minus", "sum"),
+    agg_dict = {
+        # 四个规模组的提示数量。
+        "nrCuesLag1S90p": ("quarterLag1size90plus", "sum"),
+        "nrCuesLag1S5090": ("quarterLag1size50_90", "sum"),
+        "nrCuesLag1S1050": ("quarterLag1size10_50", "sum"),
+        "nrCuesLag1S10m": ("quarterLag1size10minus", "sum"),
 
-    # SUE 加总：等权分子
-    "sumSue1Lag1S90p": ("sue1Lag1S90p", "sum"),
-    "sumSue2Lag1S90p": ("sue2Lag1S90p", "sum"),
-    "sumSue3Lag1S90p": ("sue3Lag1S90p", "sum"),
+        # 盈余惊喜的等权分子。
+        "sumSue1Lag1S90p": ("sue1Lag1S90p", "sum"),
+        "sumSue2Lag1S90p": ("sue2Lag1S90p", "sum"),
+        "sumSue3Lag1S90p": ("sue3Lag1S90p", "sum"),
 
-    # SUE × 市值加总：市值加权分子
-    "sumSue1Lag1XmarketCapS90p": ("sue1Lag1XmarketCapS90p", "sum"),
-    "sumSue2Lag1XmarketCapS90p": ("sue2Lag1XmarketCapS90p", "sum"),
-    "sumSue3Lag1XmarketCapS90p": ("sue3Lag1XmarketCapS90p", "sum"),
+        # 盈余惊喜的市值加权分子。
+        "sumSue1Lag1XmarketCapS90p": (
+            "sue1Lag1XmarketCapS90p", "sum"
+        ),
+        "sumSue2Lag1XmarketCapS90p": (
+            "sue2Lag1XmarketCapS90p", "sum"
+        ),
+        "sumSue3Lag1XmarketCapS90p": (
+            "sue3Lag1XmarketCapS90p", "sum"
+        ),
 
-    # 市值分母
-    "sumMarketCap_Minus3Lag1S90p": ("marketCap_Minus3Lag1S90p", "sum"),
-    "sumMarketCap_Minus3Lag1S5090": ("marketCap_Minus3Lag1S5090", "sum"),
+        # 市值分母。
+        "sumMarketCap_Minus3Lag1S90p": (
+            "marketCap_Minus3Lag1S90p", "sum"
+        ),
+        "sumMarketCap_Minus3Lag1S5090": (
+            "marketCap_Minus3Lag1S5090", "sum"
+        ),
 
-    # interference 等权分子
-    "sumNrFirmsAnnLag1S90p": ("nrFirmsAnnLag1S90p", "sum"),
-    "sumNrFirmsAnnLag1S5090": ("nrFirmsAnnLag1S5090", "sum"),
+        # 历史共同公告数量的等权分子。
+        "sumNrFirmsAnnLag1S90p": (
+            "nrFirmsAnnLag1S90p", "sum"
+        ),
+        "sumNrFirmsAnnLag1S5090": (
+            "nrFirmsAnnLag1S5090", "sum"
+        ),
 
-    # interference 市值加权分子
-    "sumNrFirmsAnnLag1XmarketCapS90p": ("nrFirmsAnnLag1XmarketCapS90p", "sum"),
-    "sumNrFirmsAnnLag1XmarketCapS5090": ("nrFirmsAnnLag1XmarketCapS5090", "sum"),
-}
+        # 历史共同公告数量的市值加权分子。
+        "sumNrFirmsAnnLag1XmarketCapS90p": (
+            "nrFirmsAnnLag1XmarketCapS90p", "sum"
+        ),
+        "sumNrFirmsAnnLag1XmarketCapS5090": (
+            "nrFirmsAnnLag1XmarketCapS5090", "sum"
+        ),
+    }
 
-# 加入三种 SUE 各自的非缺失 cue 数量和有效市值分母。
-agg_dict.update(sue_denominator_agg_specs())
+    # 加入三种盈余惊喜各自的有效提示数量和有效市值。
+    agg_dict.update(sue_denominator_agg_specs())
 
-# 3. max 聚合变量
-max_cols = [
-    # baseline cue by size
-    "quarterLag1size90plus",
-    "quarterLag1size50_90",
-    "quarterLag1size10_50",
-    "quarterLag1size10minus",
+    max_cols = [
+        # 基础提示标记。
+        "quarterLag1size90plus",
+        "quarterLag1size50_90",
+        "quarterLag1size10_50",
+        "quarterLag1size10minus",
 
-    # attention / volume × size
-    "lag1hiAEVsize90plus",
-    "lag1hiavolsize90plus",
-    "lag1hiavolSsize90plus",
-    "lag1hiAEVsize50_90",
-    "lag1hiavolsize50_90",
-    "lag1hiavolSsize50_90",
+        # 历史注意力和成交量标记。
+        "lag1hiAEVsize90plus",
+        "lag1hiavolsize90plus",
+        "lag1hiavolSsize90plus",
+        "lag1hiAEVsize50_90",
+        "lag1hiavolsize50_90",
+        "lag1hiavolSsize50_90",
 
-    # SUE absolute × size
-    "lag1hi_sue1_abssize90plus",
-    "lag1hi_sue2_abssize90plus",
-    "lag1hi_sue3_abssize90plus",
-    "lag1hi_sue1_abssize50_90",
-    "lag1hi_sue2_abssize50_90",
-    "lag1hi_sue3_abssize50_90",
+        # 历史高绝对盈余惊喜。
+        "lag1hi_sue1_abssize90plus",
+        "lag1hi_sue2_abssize90plus",
+        "lag1hi_sue3_abssize90plus",
+        "lag1hi_sue1_abssize50_90",
+        "lag1hi_sue2_abssize50_90",
+        "lag1hi_sue3_abssize50_90",
 
-    # SUE positive × size
-    "lag1sue1possize90plus",
-    "lag1sue2possize90plus",
-    "lag1sue3possize90plus",
-    "lag1sue1possize50_90",
-    "lag1sue2possize50_90",
-    "lag1sue3possize50_90",
+        # 历史双方正向盈余惊喜。
+        "lag1sue1possize90plus",
+        "lag1sue2possize90plus",
+        "lag1sue3possize90plus",
+        "lag1sue1possize50_90",
+        "lag1sue2possize50_90",
+        "lag1sue3possize50_90",
 
-    # SUE negative × size
-    "lag1sue1negsize90plus",
-    "lag1sue2negsize90plus",
-    "lag1sue3negsize90plus",
-    "lag1sue1negsize50_90",
-    "lag1sue2negsize50_90",
-    "lag1sue3negsize50_90",
+        # 历史双方负向盈余惊喜。
+        "lag1sue1negsize90plus",
+        "lag1sue2negsize90plus",
+        "lag1sue3negsize90plus",
+        "lag1sue1negsize50_90",
+        "lag1sue2negsize50_90",
+        "lag1sue3negsize50_90",
 
-    # SUE high positive × size
-    "lag1hi_sue1_possize90plus",
-    "lag1hi_sue2_possize90plus",
-    "lag1hi_sue3_possize90plus",
-    "lag1hi_sue1_possize50_90",
-    "lag1hi_sue2_possize50_90",
-    "lag1hi_sue3_possize50_90",
+        # 历史双方极端正向盈余惊喜。
+        "lag1hi_sue1_possize90plus",
+        "lag1hi_sue2_possize90plus",
+        "lag1hi_sue3_possize90plus",
+        "lag1hi_sue1_possize50_90",
+        "lag1hi_sue2_possize50_90",
+        "lag1hi_sue3_possize50_90",
 
-    # SUE high negative × size
-    "lag1hi_sue1_negsize90plus",
-    "lag1hi_sue2_negsize90plus",
-    "lag1hi_sue3_negsize90plus",
-    "lag1hi_sue1_negsize50_90",
-    "lag1hi_sue2_negsize50_90",
-    "lag1hi_sue3_negsize50_90",
+        # 历史双方极端负向盈余惊喜。
+        "lag1hi_sue1_negsize90plus",
+        "lag1hi_sue2_negsize90plus",
+        "lag1hi_sue3_negsize90plus",
+        "lag1hi_sue1_negsize50_90",
+        "lag1hi_sue2_negsize50_90",
+        "lag1hi_sue3_negsize50_90",
 
-    # top mover × size
-    "lag1topMoversize90plus",
-    "lag1topMoversize50_90",
-]
-
-for col in max_cols:
-    if col in df.columns:
-        agg_dict[col] = (col, "max")
-
-# 4. 检查聚合所需变量是否都存在
-needed_cols = set(group_keys)
-for _, value in agg_dict.items():
-    needed_cols.add(value[0])
-
-missing_cols = [c for c in needed_cols if c not in df.columns]
-if missing_cols:
-    raise ValueError(f"以下变量缺失，无法 collapse：{missing_cols}")
-
-# 5. collapse
-collapsed = (
-    df.groupby(group_keys, dropna=False)
-      .agg(**agg_dict)
-      .reset_index()
-)
-
-# 6. 按开关选择分母口径，计算 SUE 的等权和市值加权 cue 强度
-collapsed = calculate_sue_cue_averages(
-    collapsed,
-    denominator_mode=SUE_DENOMINATOR_MODE,
-)
-print(f"SUE 聚合分母口径：{SUE_DENOMINATOR_MODE}")
-
-# 7. 计算 interference
-collapsed["nrFirmsAnnLag1VWS90p"] = np.where(
-    collapsed["sumMarketCap_Minus3Lag1S90p"] != 0,
-    collapsed["sumNrFirmsAnnLag1XmarketCapS90p"]
-    / collapsed["sumMarketCap_Minus3Lag1S90p"],
-    np.nan,
-)
-
-collapsed["nrFirmsAnnLag1VWS5090"] = np.where(
-    collapsed["sumMarketCap_Minus3Lag1S5090"] != 0,
-    collapsed["sumNrFirmsAnnLag1XmarketCapS5090"]
-    / collapsed["sumMarketCap_Minus3Lag1S5090"],
-    np.nan,
-)
-
-collapsed["nrFirmsAnnLag1EWS90p"] = np.where(
-    collapsed["nrCuesLag1S90p"] != 0,
-    collapsed["sumNrFirmsAnnLag1S90p"]
-    / collapsed["nrCuesLag1S90p"],
-    np.nan,
-)
-
-collapsed["nrFirmsAnnLag1EWS5090"] = np.where(
-    collapsed["nrCuesLag1S5090"] != 0,
-    collapsed["sumNrFirmsAnnLag1S5090"]
-    / collapsed["nrCuesLag1S5090"],
-    np.nan,
-)
-
-# 8. 生成 date，用于后续合并日度收益
-collapsed["date"] = collapsed["event_Trddt"]
-
-# 9. 输出检查
-print("collapse 前表结构：", df.shape)
-print("collapse 后表结构：", collapsed.shape)
-print("collapse 后重复键数量：", collapsed.duplicated(group_keys).sum())
-
-print("\n核心变量合计：")
-check_cols = [
-    "nrCuesLag1S90p",
-    "nrCuesLag1S5090",
-    "nrCuesLag1S1050",
-    "nrCuesLag1S10m",
-    "quarterLag1size90plus",
-    "lag1hiAEVsize90plus",
-    "lag1hiavolsize90plus",
-    "lag1hi_sue1_possize90plus",
-    "lag1hi_sue1_negsize90plus",
-    "lag1hi_sue2_possize90plus",
-    "lag1hi_sue2_negsize90plus",
-    "lag1topMoversize90plus",
-]
-check_cols = [c for c in check_cols if c in collapsed.columns]
-print(collapsed[check_cols].sum().sort_values(ascending=False))
-
-
-collapsed = collapsed.sort_values(["StkcdRecall", "date"]).reset_index(drop=True)
-
-# 主面板只保留最终可用于回归的 cue 变量，并保存这个精简版本。
-# event_Trddt 与 date 完全一致；sum* 变量只是计算 EW/VW 指标的中间分子或分母。
-panel_drop_cols = (
-    ["event_Trddt"]
-    + [
-        col for col in collapsed.columns
-        if col.startswith(("sumSue", "sumMarketCap", "sumNrFirmsAnn"))
+        # 历史价格异动，具体口径由配置决定。
+        "lag1topMoversize90plus",
+        "lag1topMoversize50_90",
     ]
+
+    for col in max_cols:
+        if col in data_columns:
+            agg_dict[col] = (col, "max")
+
+    return agg_dict
+
+
+# ============================================================
+# 聚合到被提示公司与事件交易日，并计算各类均值
+# ============================================================
+
+def collapse_pattern_cues(mm, denominator_mode):
+    """将公司对记录聚合为被提示公司与事件交易日层面的提示表。"""
+
+    df = mm.copy()
+    group_keys = ["StkcdRecall", "event_Trddt"]
+
+    # 一、按原顺序整理聚合工作表。
+    df = df.sort_values(
+        ["StkcdRecall", "event_Trddt", "mktcap_tm3", "Stkcd"]
+    ).reset_index(drop=True)
+
+    # 二、构造规则并检查必需字段。
+    agg_dict = build_pattern_cue_agg_specs(df.columns)
+
+    needed_cols = set(group_keys)
+    for _, value in agg_dict.items():
+        needed_cols.add(value[0])
+
+    missing_cols = [
+        col for col in needed_cols
+        if col not in df.columns
+    ]
+
+    if missing_cols:
+        raise ValueError(
+            f"以下变量缺失，无法聚合：{missing_cols}"
+        )
+
+    # 三、按被提示公司与事件交易日聚合。
+    collapsed = (
+        df.groupby(group_keys, dropna=False)
+        .agg(**agg_dict)
+        .reset_index()
+    )
+
+    # 四、按传入的分母口径计算盈余惊喜均值。
+    collapsed = calculate_sue_cue_averages(
+        collapsed,
+        denominator_mode=denominator_mode,
+    )
+    print("盈余惊喜聚合分母口径：", denominator_mode)
+
+    # 五、计算历史共同公告数量的市值加权均值。
+    collapsed["nrFirmsAnnLag1VWS90p"] = np.where(
+        collapsed["sumMarketCap_Minus3Lag1S90p"] != 0,
+        collapsed["sumNrFirmsAnnLag1XmarketCapS90p"]
+        / collapsed["sumMarketCap_Minus3Lag1S90p"],
+        np.nan,
+    )
+
+    collapsed["nrFirmsAnnLag1VWS5090"] = np.where(
+        collapsed["sumMarketCap_Minus3Lag1S5090"] != 0,
+        collapsed["sumNrFirmsAnnLag1XmarketCapS5090"]
+        / collapsed["sumMarketCap_Minus3Lag1S5090"],
+        np.nan,
+    )
+
+    # 六、计算历史共同公告数量的等权均值。
+    collapsed["nrFirmsAnnLag1EWS90p"] = np.where(
+        collapsed["nrCuesLag1S90p"] != 0,
+        collapsed["sumNrFirmsAnnLag1S90p"]
+        / collapsed["nrCuesLag1S90p"],
+        np.nan,
+    )
+
+    collapsed["nrFirmsAnnLag1EWS5090"] = np.where(
+        collapsed["nrCuesLag1S5090"] != 0,
+        collapsed["sumNrFirmsAnnLag1S5090"]
+        / collapsed["nrCuesLag1S5090"],
+        np.nan,
+    )
+
+    # 七、保留供后续日度面板合并使用的日期别名。
+    collapsed["date"] = collapsed["event_Trddt"]
+
+    # 八、保留原有诊断输出。
+    print("聚合前表结构：", df.shape)
+    print("聚合后表结构：", collapsed.shape)
+    print(
+        "聚合后重复键数量：",
+        collapsed.duplicated(group_keys).sum(),
+    )
+
+    print("\n核心变量合计：")
+    check_cols = [
+        "nrCuesLag1S90p",
+        "nrCuesLag1S5090",
+        "nrCuesLag1S1050",
+        "nrCuesLag1S10m",
+        "quarterLag1size90plus",
+        "lag1hiAEVsize90plus",
+        "lag1hiavolsize90plus",
+        "lag1hi_sue1_possize90plus",
+        "lag1hi_sue1_negsize90plus",
+        "lag1hi_sue2_possize90plus",
+        "lag1hi_sue2_negsize90plus",
+        "lag1topMoversize90plus",
+    ]
+    check_cols = [
+        col for col in check_cols
+        if col in collapsed.columns
+    ]
+    print(
+        collapsed[check_cols]
+        .sum()
+        .sort_values(ascending=False)
+    )
+
+    collapsed = (
+        collapsed.sort_values(["StkcdRecall", "date"])
+        .reset_index(drop=True)
+    )
+
+    return collapsed
+
+
+collapsed = collapse_pattern_cues(
+    mm=mm,
+    denominator_mode=config["SUE_DENOMINATOR_MODE"],
 )
 
-cue_events_for_panel = collapsed.drop(columns=panel_drop_cols, errors="ignore").copy()
+# ============================================================
+# 精简提示事件表并保存，供后续日度面板合并
+# ============================================================
 
-cue_events_for_panel.to_csv(
-    cue_events_out_path,
-    index=False,
-    encoding="utf-8-sig",
-    date_format="%Y-%m-%d",
+def save_pattern_cue_events(collapsed, output_path):
+    """删除聚合中间列，保存并返回精简提示事件表。"""
+
+    output_path = Path(output_path)
+
+    # 日期别名已在上游生成，保留日期别名供后续合并。
+    # 各类加总列只用于计算均值，完成计算后删除。
+    panel_drop_cols = (
+        ["event_Trddt"]
+        + [
+            col for col in collapsed.columns
+            if col.startswith(
+                ("sumSue", "sumMarketCap", "sumNrFirmsAnn")
+            )
+        ]
+    )
+
+    cue_events_for_panel = (
+        collapsed
+        .drop(columns=panel_drop_cols, errors="ignore")
+        .copy()
+    )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cue_events_for_panel.to_csv(
+        output_path,
+        index=False,
+        encoding="utf-8-sig",
+        date_format="%Y-%m-%d",
+    )
+
+    print(
+        "\n已保存用于后续主面板合并的提示事件表：",
+        output_path,
+    )
+    print("保存行数：", len(cue_events_for_panel))
+    print("保存列数：", cue_events_for_panel.shape[1])
+    print("已删除的中间变量：")
+    print(panel_drop_cols)
+
+    return cue_events_for_panel
+
+
+cue_events_for_panel = save_pattern_cue_events(
+    collapsed=collapsed,
+    output_path=paths["cue_events_out_path"],
 )
 
-print(f"\n已保存用于后续主面板合并的 cue 事件表：{cue_events_out_path}")
-print("保存行数：", len(cue_events_for_panel))
-print("保存列数：", cue_events_for_panel.shape[1])
-print("已删除的中间变量：")
-print(panel_drop_cols)
-
-del mm, mm_key, df, collapsed, mktcap, mktcap_key
-del daily_industry, analyst_overlap, sue
+del mm, mm_key,  collapsed
 gc.collect()
 
 
@@ -1051,205 +1545,319 @@ gc.collect()
 # 从股票日度数据开始构建主样本，再合并 cue 事件数据
 #===============================================================================
 
-TRD_Dalyr = pd.read_csv(
-    TRD_Dalyr_DGTW_path,
-    encoding='utf-8',
-    usecols=(
-        ["Stkcd", "td", "Trddt", "year", "mktcap_tm3",
-         "raw_ret_tm3", "raw_ret_tm2", "raw_ret_tm1", "raw_ret_t"]
-        + [f"raw_ret_t_t{i}" for i in range(1, 51)]
-    ),
-    dtype=(
-        {"Stkcd": "string", "td": "int32", "year": "float32", "mktcap_tm3": "float32"}
-        | {
-            column: "float32"
-            for column in (
-                ["raw_ret_tm3", "raw_ret_tm2", "raw_ret_tm1", "raw_ret_t"]
-                + [f"raw_ret_t_t{i}" for i in range(1, 51)]
-            )
-        }
-    ),
-    parse_dates=['Trddt']
-)
+# ============================================================
+# 读取日度主面板并统一收益变量名称
+# ============================================================
 
-TRD_Dalyr['Stkcd'] = TRD_Dalyr['Stkcd'].apply(normalize_stock_code)
+def load_pattern_daily_panel(daily_panel_path):
+    """读取个股日度面板，标准化股票代码并重命名收益变量。"""
 
-TRD_Dalyr = TRD_Dalyr.rename(
-    columns={'Stkcd':'StkcdRecall'}
-).drop(columns=['IndustryCode'], errors='ignore')
+    forward_return_cols = [
+        f"raw_ret_t_t{i}"
+        for i in range(1, 51)
+    ]
 
-# 将原始收益率变量改成和原文一致的命名
-raw_return_rename = {
-    "raw_ret_tm3": "return_tm3_Recall",
-    "raw_ret_tm2": "return_tm2_Recall",
-    "raw_ret_tm1": "return_tm1_Recall",
-    "raw_ret_t": "return_t_Recall",
-}
+    base_return_cols = [
+        "raw_ret_tm3",
+        "raw_ret_tm2",
+        "raw_ret_tm1",
+        "raw_ret_t",
+    ]
 
-raw_return_rename.update({
-    f"raw_ret_t_t{i}": f"return_t_tp{i}_Recall"
-    for i in range(1, 51)
-})
-
-TRD_Dalyr = TRD_Dalyr.rename(columns=raw_return_rename)
-
-
-# 标记被提示公司自身财报公告日，用于后续回归控制
-IAR_Rept = pd.read_csv(
-    IAR_Rept_path,
-    usecols=['Stkcd','Accper','Annodt'],
-    parse_dates=['Accper','Annodt']
-)
-
-IAR_Rept['Stkcd'] = IAR_Rept['Stkcd'].apply(normalize_stock_code)
-IAR_Rept = IAR_Rept.rename(columns={
-    'Stkcd':'StkcdRecall'
-})
-
-# 把自身公告自然日映射到用于收益反应的事件交易日
-calendar = (
-    TRD_Dalyr[['Trddt', 'td']]
-    .drop_duplicates()
-    .sort_values('Trddt')
-)
-
-ann_key = (
-    IAR_Rept[['Annodt']]
-    .dropna()
-    .drop_duplicates()
-    .sort_values('Annodt')
-)
-
-ann_key = pd.merge_asof(
-    ann_key,
-    calendar,
-    left_on='Annodt',
-    right_on='Trddt',
-    direction='forward',
-    allow_exact_matches=(EVENT_DATE_MODE == "next_if_nontrading")
-)
-
-# 生成 股票 × 事件交易日 × ownEA
-own_ea = (
-    IAR_Rept
-    .merge(ann_key, on='Annodt', how='left', validate='m:1')
-    .dropna(subset=['Trddt'])
-    [['StkcdRecall', 'Trddt']]
-    .drop_duplicates()
-)
-
-own_ea['ownEA'] = 1
-
-# 合并回日度面板
-TRD_Dalyr = TRD_Dalyr.merge(
-    own_ea,
-    on=['StkcdRecall', 'Trddt'],
-    how='left',
-    validate='1:1'
-)
-
-TRD_Dalyr['ownEA'] = TRD_Dalyr['ownEA'].fillna(0).astype('int8')
-
-print("ownEA为1的数量：",(TRD_Dalyr['ownEA']==1).sum())
-print("ownEA为1的比例：",((TRD_Dalyr['ownEA']==1).sum())/len(TRD_Dalyr))
-unmatched_own_ea = own_ea.merge(
-    TRD_Dalyr[['StkcdRecall', 'Trddt']],
-    on=['StkcdRecall', 'Trddt'],
-    how='left',
-    indicator=True
-)
-
-unmatched_own_ea = unmatched_own_ea.loc[
-    unmatched_own_ea['_merge'].eq('left_only')
-].copy()
-
-print('未匹配自身公告事件数：', len(unmatched_own_ea))
-print(unmatched_own_ea['Trddt'].dt.year.value_counts().sort_index())
-
-# 生成被提示公司自身盈余公告在事件日前后 10 个交易日内的控制变量
-# 这些变量用于控制自身公告窗口对收益的污染
-#===============================================================================
-# 构造 own EA 前后 10 个交易日 dummy
-# 当前 TRD_Dalyr 层级：StkcdRecall × Trddt
-#===============================================================================
-
-# 先检查主面板唯一性
-dup_n = TRD_Dalyr.duplicated(['StkcdRecall', 'td']).sum()
-print("TRD_Dalyr 中 StkcdRecall-td 重复数：", dup_n)
-
-if dup_n != 0:
-    raise ValueError("TRD_Dalyr 中 StkcdRecall-td 不唯一，请先检查是否存在重复交易日记录。")
-
-# 提取自身公告所在的 股票-交易日序号
-own_ea_td = (
-    TRD_Dalyr.loc[TRD_Dalyr['ownEA'].eq(1), ['StkcdRecall', 'td']]
-    .drop_duplicates()
-    .copy()
-)
-
-print("ownEA 事件数：", len(own_ea_td))
-
-for i in range(1, 11):
-    # ------------------------------------------------------------
-    # ownEA_tp{i}: 当前日后 i 个交易日会发生 ownEA
-    # 如果公告日在 td=100，那么 td=100-i 的行 ownEA_tp{i}=1
-    # ------------------------------------------------------------
-    future_ea = own_ea_td.copy()
-    future_ea['td'] = future_ea['td'] - i
-    future_ea = (
-        future_ea
-        .drop_duplicates(['StkcdRecall', 'td'])
-        .assign(**{f'ownEA_tp{i}': 1})
+    daily_panel = pd.read_csv(
+        daily_panel_path,
+        encoding="utf-8",
+        usecols=(
+            [
+                "Stkcd",
+                "td",
+                "Trddt",
+                "year",
+                "mktcap_tm3",
+            ]
+            + base_return_cols
+            + forward_return_cols
+        ),
+        dtype=(
+            {
+                "Stkcd": "string",
+                "td": "int32",
+                "year": "float32",
+                "mktcap_tm3": "float32",
+            }
+            | {
+                column: "float32"
+                for column in base_return_cols + forward_return_cols
+            }
+        ),
+        parse_dates=["Trddt"],
     )
 
-    TRD_Dalyr = TRD_Dalyr.merge(
-        future_ea,
-        on=['StkcdRecall', 'td'],
-        how='left',
-        validate='1:1'
+    daily_panel["Stkcd"] = (
+        daily_panel["Stkcd"]
+        .apply(normalize_stock_code)
     )
 
-    TRD_Dalyr[f'ownEA_tp{i}'] = (
-        TRD_Dalyr[f'ownEA_tp{i}']
+    # 日度面板在后续全部按被提示公司命名。
+    daily_panel = (
+        daily_panel
+        .rename(columns={"Stkcd": "StkcdRecall"})
+        .drop(columns=["IndustryCode"], errors="ignore")
+    )
+
+    raw_return_rename = {
+        "raw_ret_tm3": "return_tm3_Recall",
+        "raw_ret_tm2": "return_tm2_Recall",
+        "raw_ret_tm1": "return_tm1_Recall",
+        "raw_ret_t": "return_t_Recall",
+    }
+
+    raw_return_rename.update({
+        f"raw_ret_t_t{i}": f"return_t_tp{i}_Recall"
+        for i in range(1, 51)
+    })
+
+    daily_panel = daily_panel.rename(
+        columns=raw_return_rename
+    )
+
+    return daily_panel
+
+
+TRD_Dalyr = load_pattern_daily_panel(
+    TRD_Dalyr_DGTW_path
+)
+# ============================================================
+# 将自身公告日映射到事件交易日，并生成 ownEA
+# ============================================================
+
+def add_own_earnings_announcement_flag(
+    daily_panel,
+    report_path,
+    event_date_mode,
+):
+    """将自身公告日期映射到交易日，并合并 ownEA 标记。"""
+
+    if event_date_mode not in {
+        "next_if_nontrading",
+        "strict_next_trading",
+    }:
+        raise ValueError(
+            "自身公告事件日口径设置无效："
+            f"{event_date_mode!r}"
+        )
+
+    report = pd.read_csv(
+        report_path,
+        usecols=["Stkcd", "Accper", "Annodt"],
+        parse_dates=["Accper", "Annodt"],
+    )
+
+    report["Stkcd"] = (
+        report["Stkcd"]
+        .apply(normalize_stock_code)
+    )
+
+    report = report.rename(
+        columns={"Stkcd": "StkcdRecall"}
+    )
+
+    calendar = (
+        daily_panel[["Trddt", "td"]]
+        .drop_duplicates()
+        .sort_values("Trddt")
+    )
+
+    announcement_dates = (
+        report[["Annodt"]]
+        .dropna()
+        .drop_duplicates()
+        .sort_values("Annodt")
+    )
+
+    announcement_dates = pd.merge_asof(
+        announcement_dates,
+        calendar,
+        left_on="Annodt",
+        right_on="Trddt",
+        direction="forward",
+        allow_exact_matches=(
+            event_date_mode == "next_if_nontrading"
+        ),
+    )
+
+    own_ea = (
+        report
+        .merge(
+            announcement_dates,
+            on="Annodt",
+            how="left",
+            validate="many_to_one",
+        )
+        .dropna(subset=["Trddt"])
+        [["StkcdRecall", "Trddt"]]
+        .drop_duplicates()
+    )
+
+    own_ea["ownEA"] = 1
+
+    daily_panel = daily_panel.merge(
+        own_ea,
+        on=["StkcdRecall", "Trddt"],
+        how="left",
+        validate="one_to_one",
+    )
+
+    daily_panel["ownEA"] = (
+        daily_panel["ownEA"]
         .fillna(0)
-        .astype('int8')
+        .astype("int8")
     )
 
-    # ------------------------------------------------------------
-    # ownEA_tm{i}: 当前日前 i 个交易日发生过 ownEA
-    # 如果公告日在 td=100，那么 td=100+i 的行 ownEA_tm{i}=1
-    # ------------------------------------------------------------
-    past_ea = own_ea_td.copy()
-    past_ea['td'] = past_ea['td'] + i
-    past_ea = (
-        past_ea
-        .drop_duplicates(['StkcdRecall', 'td'])
-        .assign(**{f'ownEA_tm{i}': 1})
+    print(
+        "ownEA为1的数量：",
+        (daily_panel["ownEA"] == 1).sum(),
+    )
+    print(
+        "ownEA为1的比例：",
+        (daily_panel["ownEA"] == 1).sum()
+        / len(daily_panel),
     )
 
-    TRD_Dalyr = TRD_Dalyr.merge(
-        past_ea,
-        on=['StkcdRecall', 'td'],
-        how='left',
-        validate='1:1'
+    unmatched_own_ea = (
+        own_ea
+        .merge(
+            daily_panel[["StkcdRecall", "Trddt"]],
+            on=["StkcdRecall", "Trddt"],
+            how="left",
+            indicator=True,
+        )
+        .loc[lambda data: data["_merge"].eq("left_only")]
+        .copy()
     )
 
-    TRD_Dalyr[f'ownEA_tm{i}'] = (
-        TRD_Dalyr[f'ownEA_tm{i}']
-        .fillna(0)
-        .astype('int8')
+    print(
+        "未匹配自身公告事件数：",
+        len(unmatched_own_ea),
+    )
+    print(
+        unmatched_own_ea["Trddt"]
+        .dt.year
+        .value_counts()
+        .sort_index()
     )
 
-print("ownEA 前后窗口变量生成完成。")
+    return daily_panel
 
-own_ea_window_cols = (
-    [f'ownEA_tp{i}' for i in range(1, 11)]
-    + ['ownEA']
-    + [f'ownEA_tm{i}' for i in range(1, 11)]
+
+TRD_Dalyr = add_own_earnings_announcement_flag(
+    daily_panel=TRD_Dalyr,
+    report_path=IAR_Rept_path,
+    event_date_mode=config["EVENT_DATE_MODE"],
 )
+# ============================================================
+# 构造自身公告日前后交易日窗口控制变量
+# ============================================================
 
-print(TRD_Dalyr[own_ea_window_cols].sum())
+def add_own_ea_windows(daily_panel, window=10):
+    """生成自身公告日前后若干个交易日的控制变量。"""
 
+    if (
+        not isinstance(window, int)
+        or isinstance(window, bool)
+        or window <= 0
+    ):
+        raise ValueError("自身公告窗口长度必须为正整数")
+
+    key_cols = ["StkcdRecall", "td"]
+
+    # 日度主面板必须在被提示公司—交易日序号层面唯一。
+    duplicate_count = daily_panel.duplicated(key_cols).sum()
+    print(
+        "日度主面板中 StkcdRecall-td 重复数：",
+        duplicate_count,
+    )
+
+    if duplicate_count != 0:
+        raise ValueError(
+            "日度主面板中 StkcdRecall-td 不唯一，"
+            "不能构造自身公告窗口。"
+        )
+
+    # 提取自身公告发生的公司—交易日序号。
+    own_ea_td = (
+        daily_panel.loc[
+            daily_panel["ownEA"].eq(1),
+            ["StkcdRecall", "td"],
+        ]
+        .drop_duplicates()
+        .copy()
+    )
+
+    print("ownEA 事件数：", len(own_ea_td))
+
+    for i in range(1, window + 1):
+        # ownEA_tp{i}：当前日之后第 i 个交易日发生自身公告。
+        future_ea = own_ea_td.copy()
+        future_ea["td"] = future_ea["td"] - i
+        future_ea = (
+            future_ea
+            .drop_duplicates(["StkcdRecall", "td"])
+            .assign(**{f"ownEA_tp{i}": 1})
+        )
+
+        daily_panel = daily_panel.merge(
+            future_ea,
+            on=["StkcdRecall", "td"],
+            how="left",
+            validate="one_to_one",
+        )
+
+        daily_panel[f"ownEA_tp{i}"] = (
+            daily_panel[f"ownEA_tp{i}"]
+            .fillna(0)
+            .astype("int8")
+        )
+
+        # ownEA_tm{i}：当前日之前第 i 个交易日发生自身公告。
+        past_ea = own_ea_td.copy()
+        past_ea["td"] = past_ea["td"] + i
+        past_ea = (
+            past_ea
+            .drop_duplicates(["StkcdRecall", "td"])
+            .assign(**{f"ownEA_tm{i}": 1})
+        )
+
+        daily_panel = daily_panel.merge(
+            past_ea,
+            on=["StkcdRecall", "td"],
+            how="left",
+            validate="one_to_one",
+        )
+
+        daily_panel[f"ownEA_tm{i}"] = (
+            daily_panel[f"ownEA_tm{i}"]
+            .fillna(0)
+            .astype("int8")
+        )
+
+    print("ownEA 前后窗口变量生成完成。")
+
+    own_ea_window_cols = (
+        [f"ownEA_tp{i}" for i in range(1, window + 1)]
+        + ["ownEA"]
+        + [f"ownEA_tm{i}" for i in range(1, window + 1)]
+    )
+
+    print(daily_panel[own_ea_window_cols].sum())
+
+    return daily_panel
+
+
+TRD_Dalyr = add_own_ea_windows(
+    daily_panel=TRD_Dalyr,
+    window=10,
+)
 
 #===============================================================================
 # 合并被提示公司业绩预告/快报与专题事件控制变量
@@ -1346,7 +1954,152 @@ print(
         & TRD_Dalyr["ownPerformanceForecast"].eq(1)
     ).sum()
 )
+# ============================================================
+# 合并自身业绩预告和专题事件控制变量
+# ============================================================
 
+def merge_own_event_controls(
+    daily_panel,
+    performance_forecast_path,
+    other_event_path,
+):
+    """读取并合并被提示公司的业绩预告和专题事件控制变量。"""
+
+    performance_forecast_controls = pd.read_csv(
+        performance_forecast_path,
+        encoding="utf-8-sig",
+        usecols=[
+            "StkcdRecall",
+            "Trddt",
+            "ownPerformanceForecastBrief",
+        ],
+        dtype={"StkcdRecall": "string"},
+        parse_dates=["Trddt"],
+    )
+
+    other_event_controls = pd.read_csv(
+        other_event_path,
+        encoding="utf-8-sig",
+        usecols=[
+            "StkcdRecall",
+            "Trddt",
+            "ownOtherEventER",
+        ],
+        dtype={"StkcdRecall": "string"},
+        parse_dates=["Trddt"],
+    )
+
+    control_tables = [
+        (
+            "业绩预告快报",
+            performance_forecast_controls,
+            "ownPerformanceForecastBrief",
+        ),
+        (
+            "专题事件",
+            other_event_controls,
+            "ownOtherEventER",
+        ),
+    ]
+
+    for controls_name, controls_df, value_col in control_tables:
+        controls_df["StkcdRecall"] = (
+            controls_df["StkcdRecall"]
+            .apply(normalize_stock_code)
+        )
+
+        missing_key = (
+            controls_df["StkcdRecall"].eq("")
+            | controls_df["Trddt"].isna()
+        ).sum()
+
+        duplicate_key = controls_df.duplicated(
+            ["StkcdRecall", "Trddt"]
+        ).sum()
+
+        print(
+            f"{controls_name}控制表缺失键数：{missing_key}，"
+            f"重复键数：{duplicate_key}"
+        )
+
+        if missing_key != 0 or duplicate_key != 0:
+            raise ValueError(
+                f"{controls_name}控制表在 "
+                "StkcdRecall-Trddt 层面存在缺失或重复，"
+                "请先检查。"
+            )
+
+        controls_df[value_col] = (
+            pd.to_numeric(
+                controls_df[value_col],
+                errors="raise",
+            )
+            .fillna(0)
+            .astype("int8")
+        )
+
+    # 两张控制表已经按真实交易日整理，直接按公司和交易日合并。
+    daily_panel = daily_panel.merge(
+        performance_forecast_controls,
+        on=["StkcdRecall", "Trddt"],
+        how="left",
+        validate="one_to_one",
+    )
+
+    daily_panel = daily_panel.merge(
+        other_event_controls,
+        on=["StkcdRecall", "Trddt"],
+        how="left",
+        validate="one_to_one",
+    )
+
+    control_cols = [
+        "ownPerformanceForecastBrief",
+        "ownOtherEventER",
+    ]
+
+    daily_panel[control_cols] = (
+        daily_panel[control_cols]
+        .fillna(0)
+        .astype("int8")
+    )
+
+    # 保持后续回归使用的变量名称。
+    daily_panel["ownMajorDisclosure"] = (
+        daily_panel["ownOtherEventER"]
+        .astype("int8")
+    )
+
+    daily_panel["ownPerformanceForecast"] = (
+        daily_panel["ownPerformanceForecastBrief"]
+        .astype("int8")
+    )
+
+    print(
+        "ownMajorDisclosure=1 数量：",
+        daily_panel["ownMajorDisclosure"].sum(),
+    )
+    print(
+        "ownPerformanceForecast=1 数量：",
+        daily_panel["ownPerformanceForecast"].sum(),
+    )
+    print(
+        "ownMajorDisclosure 与 ownPerformanceForecast "
+        "同时为1数量：",
+        (
+            daily_panel["ownMajorDisclosure"].eq(1)
+            & daily_panel["ownPerformanceForecast"].eq(1)
+        ).sum(),
+    )
+
+    return daily_panel
+
+
+TRD_Dalyr = merge_own_event_controls(
+    daily_panel=TRD_Dalyr,
+    performance_forecast_path=performance_forecast_controls_path,
+    other_event_path=other_event_controls_path,
+)
 
 
 #===============================================================================
