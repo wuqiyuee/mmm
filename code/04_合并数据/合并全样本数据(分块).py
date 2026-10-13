@@ -441,6 +441,75 @@ def load_full_supply_chain_index(supply_chain_path):
         ["yearCue", "Stkcd", "StkcdRecall"]
     ).index
 
+def load_full_analyst_exclusion_index(
+    overlap_root,
+    id_mode,
+    lookback_days,
+):
+    """读取已有共同分析师覆盖结果，构造公司对排除索引。"""
+
+    id_mode_folder = {
+        "split": "拆开AnanmID",
+        "team": "不拆开AnanmID",
+    }
+
+    if id_mode not in id_mode_folder:
+        raise ValueError(
+            "分析师身份口径只能是 "
+            "'split'（个人）或 'team'（完整团队）。"
+        )
+
+    analyst_overlap_path = (
+        Path(overlap_root)
+        / id_mode_folder[id_mode]
+        / f"Full样本_分析师共同覆盖_滚动{lookback_days}天.csv"
+    )
+
+    analyst_overlap = pd.read_csv(
+        analyst_overlap_path,
+        encoding="utf-8-sig",
+        usecols=[
+            "Annodt",
+            "Stkcd",
+            "StkcdRecall",
+            "same_analyst_overlap",
+            "n_common_analysts",
+        ],
+        dtype={
+            "Stkcd": "string",
+            "StkcdRecall": "string",
+            "same_analyst_overlap": "Int64",
+            "n_common_analysts": "Int64",
+        },
+        parse_dates=["Annodt"],
+    )
+
+    analyst_overlap["Stkcd"] = (
+        analyst_overlap["Stkcd"].apply(normalize_stock_code)
+    )
+    analyst_overlap["StkcdRecall"] = (
+        analyst_overlap["StkcdRecall"].apply(normalize_stock_code)
+    )
+
+    # 沿用原规则：重复公司对公告日保留首条。
+    analyst_overlap = analyst_overlap.drop_duplicates(
+        ["Annodt", "Stkcd", "StkcdRecall"]
+    )
+
+    # 来源文件只记录已识别共同覆盖的公司对。
+    # 沿用标记非缺失即纳入排除索引的判定。
+    analyst_exclusion_index = analyst_overlap.loc[
+        analyst_overlap["same_analyst_overlap"].notna(),
+        ["Annodt", "Stkcd", "StkcdRecall"],
+    ].set_index(
+        ["Annodt", "Stkcd", "StkcdRecall"]
+    ).index
+
+    del analyst_overlap
+    gc.collect()
+
+    return analyst_exclusion_index
+
 
 print("正在读取辅助表......")
 
@@ -466,52 +535,11 @@ industry_index = load_full_industry_index(
 vertical_pair_index = load_full_supply_chain_index(
     supply_chain_path=SC_NetWorkRelationsIndex_path,
 )
-
-id_mode_folder = {
-    "split": "拆开AnanmID",
-    "team": "不拆开AnanmID",
-}
-
-if ANALYST_ID_MODE not in id_mode_folder:
-    raise ValueError("ANALYST_ID_MODE 只能是 'split' 或 'team'")
-
-analyst_overlap_path = (
-    ANALYST_OVERLAP_ROOT
-    / id_mode_folder[ANALYST_ID_MODE]
-    / f"Full样本_分析师共同覆盖_滚动{ANALYST_LOOKBACK_DAYS}天.csv"
+analyst_exclusion_index = load_full_analyst_exclusion_index(
+    overlap_root=ANALYST_OVERLAP_ROOT,
+    id_mode=ANALYST_ID_MODE,
+    lookback_days=ANALYST_LOOKBACK_DAYS,
 )
-
-analyst_overlap = pd.read_csv(
-    analyst_overlap_path,
-    encoding="utf-8-sig",
-    usecols=[
-        "Annodt",
-        "Stkcd",
-        "StkcdRecall",
-        "same_analyst_overlap",
-        "n_common_analysts",
-    ],
-    dtype={
-        "Stkcd": "string",
-        "StkcdRecall": "string",
-        "same_analyst_overlap": "Int64",
-        "n_common_analysts": "Int64",
-    },
-    parse_dates=["Annodt"],
-)
-
-analyst_overlap["Stkcd"] = analyst_overlap["Stkcd"].apply(normalize_stock_code)
-analyst_overlap["StkcdRecall"] = analyst_overlap["StkcdRecall"].apply(normalize_stock_code)
-
-analyst_overlap = analyst_overlap.drop_duplicates(
-    ["Annodt", "Stkcd", "StkcdRecall"]
-)
-analyst_exclusion_index = analyst_overlap.loc[
-    analyst_overlap["same_analyst_overlap"].notna(),
-    ["Annodt", "Stkcd", "StkcdRecall"],
-].set_index(["Annodt", "Stkcd", "StkcdRecall"]).index
-del analyst_overlap
-gc.collect()
 
 print("辅助表读取完成。")
 
