@@ -141,26 +141,6 @@ def build_pattern_paths(root):
     }
 
 
-ROOT = Path("/Users/qiyuewu/Desktop/mmm复现数据包")
-paths = build_pattern_paths(ROOT)
-
-# 分步封装期间，保留原变量名，供后面的代码继续使用。
-MemoryMatrixPattern_path = paths["MemoryMatrixPattern_path"]
-TRD_Cale_td_path = paths["TRD_Cale_td_path"]
-TRD_Dalyr_DGTW_path = paths["TRD_Dalyr_DGTW_path"]
-marketcap_group_path = paths["marketcap_group_path"]
-industry_path = paths["industry_path"]
-sue_path = paths["sue_path"]
-SC_NetWorkRelationsIndex_path = paths["SC_NetWorkRelationsIndex_path"]
-IAR_Rept_path = paths["IAR_Rept_path"]
-AES_AEV_controls_path = paths["AES_AEV_controls_path"]
-adjusted_return_path = paths["adjusted_return_path"]
-performance_forecast_controls_path = paths["performance_forecast_controls_path"]
-other_event_controls_path = paths["other_event_controls_path"]
-sample_intermediate_out_path = paths["sample_intermediate_out_path"]
-cue_events_out_path = paths["cue_events_out_path"]
-output_path = paths["output_path"]
-
 # =============================================================================
 # 参数构造与校验
 # =============================================================================
@@ -228,47 +208,6 @@ def build_pattern_config(
         raise ValueError("分析师回溯天数必须为正整数")
 
     return config
-
-
-# 今后调整口径，集中修改下面的参数值。
-config = build_pattern_config(
-    # 每种盈余惊喜使用自身非缺失提示公司数量／市值作分母；
-    # 若改为全部提示公司作分母，使用 "all_cues"。
-    sue_denominator_mode="nonmissing_sue",
-
-    # 删除有共同分析师覆盖的公司对。
-    drop_analyst_overlap=True,
-
-    # 按个人分析师识别；按原始团队字符串识别则使用 "team"。
-    analyst_id_mode="split",
-
-    # 选择对应回溯窗口的已有分析师共同覆盖文件。
-    analyst_lookback_days=365,
-
-    # 使用上月市值断点；使用当月断点则设置为 "same_month"。
-    marketcap_breakpoint_mode="prev_month",
-
-    # 自身公告：交易日保留，非交易日映射至下一交易日。
-    # 交易日也顺延则设置为 "strict_next_trading"。
-    event_date_mode="next_if_nontrading",
-    
-    # 历史共同公告时，任意一家进入价格异动组。
-    # 要求两家公司同时进入，则设置为 "both"。
-    top_mover_mode="any",
-)
-
-# 分步封装期间，保留原变量名供后面的代码使用。
-SUE_DENOMINATOR_MODE = config["SUE_DENOMINATOR_MODE"]
-DROP_ANALYST_OVERLAP = config["DROP_ANALYST_OVERLAP"]
-ANALYST_ID_MODE = config["ANALYST_ID_MODE"]
-ANALYST_LOOKBACK_DAYS = config["ANALYST_LOOKBACK_DAYS"]
-MARKETCAP_BREAKPOINT_MODE = config["MARKETCAP_BREAKPOINT_MODE"]
-EVENT_DATE_MODE = config["EVENT_DATE_MODE"]
-
-# 分析师目录暂时保留，后续封装读取函数时再统一整理。
-ANALYST_OVERLAP_ROOT = (
-    ROOT / "中间结果/03_记忆矩阵/分析师共同覆盖_参考文献后"
-)
 
 # =============================================================================
 # 读取记忆矩阵并合并提示公司市值
@@ -350,12 +289,6 @@ def load_pattern_matrix_with_marketcap(matrix_path, daily_panel_path):
     print("提示公司总市值缺失比例：", mm["mktcap_tm3"].isna().mean())
 
     return mm
-
-
-mm = load_pattern_matrix_with_marketcap(
-    matrix_path=paths["MemoryMatrixPattern_path"],
-    daily_panel_path=paths["TRD_Dalyr_DGTW_path"],
-)
 
 # 合并市值排名数据
 
@@ -451,13 +384,6 @@ def merge_monthly_marketcap_breakpoints(
 
     return mm
 
-
-mm = merge_monthly_marketcap_breakpoints(
-    mm=mm,
-    breakpoint_path=paths["marketcap_group_path"],
-    breakpoint_mode=config["MARKETCAP_BREAKPOINT_MODE"],
-)
-
 # =============================================================================
 # 合并提示公司当前财报的盈余惊喜
 # =============================================================================
@@ -524,13 +450,6 @@ def merge_current_cue_sue(mm, sue_path, report_path):
     print(mm[["sue1", "sue2", "sue3"]].isna().sum())
 
     return mm
-
-
-mm = merge_current_cue_sue(
-    mm=mm,
-    sue_path=paths["sue_path"],
-    report_path=paths["IAR_Rept_path"],
-)
 
 #===============================================================================
 # 筛选符合条件的 cue-recall 公司对
@@ -635,11 +554,6 @@ def filter_same_industry_pairs(mm, industry_path):
 
     return mm_key
 
-
-mm_key = filter_same_industry_pairs(
-    mm=mm,
-    industry_path=paths["industry_path"],
-)
 
 # 删除上下游垂直相关公司对
 #（这里仅排除一级供应链关系，后续如果需要的话还可以排除二级供应链关系作为稳健性检验）
@@ -770,11 +684,6 @@ def filter_supply_chain_pairs(mm_key, supply_chain_path):
     return mm_key
 
 
-mm_key = filter_supply_chain_pairs(
-    mm_key=mm_key,
-    supply_chain_path=paths["SC_NetWorkRelationsIndex_path"],
-)
-
 # =============================================================================
 # 合并共同分析师覆盖，并按开关过滤公司对
 # =============================================================================
@@ -878,15 +787,6 @@ def filter_analyst_overlap_pairs(
     return mm_key
 
 
-mm_key = filter_analyst_overlap_pairs(
-    mm_key=mm_key,
-    overlap_root=ANALYST_OVERLAP_ROOT,
-    id_mode=config["ANALYST_ID_MODE"],
-    lookback_days=config["ANALYST_LOOKBACK_DAYS"],
-    drop_overlap=config["DROP_ANALYST_OVERLAP"],
-)
-
-
 # =============================================================================
 # 将合格公司对名单应用到完整记忆矩阵
 # =============================================================================
@@ -922,11 +822,6 @@ def apply_pair_filters(mm, mm_key):
 
     return mm
 
-
-mm = apply_pair_filters(
-    mm=mm,
-    mm_key=mm_key,
-)
 
 #===============================================================================
 # 构造 cue dummy: 大公司cue、强记忆cue
@@ -982,8 +877,6 @@ def add_size_groups_and_basic_cues(mm):
 
     return mm
 
-
-mm = add_size_groups_and_basic_cues(mm)
 
 # ============================================================
 # 构造历史机制标记与提示公司规模组的交互变量
@@ -1093,11 +986,6 @@ def add_strong_memory_cues(mm, top_mover_mode="any"):
     return mm
 
 
-mm = add_strong_memory_cues(
-    mm=mm,
-    top_mover_mode=config["TOP_MOVER_MODE"],
-)
-
 # ============================================================
 # 准备大市值提示事件的盈余惊喜分子及有效分母输入
 # ============================================================
@@ -1132,8 +1020,6 @@ def add_sue_cue_inputs(mm):
 
     return mm
 
-
-mm = add_sue_cue_inputs(mm)
 # ============================================================
 # 准备市值分母和历史共同公告数量分子
 # ============================================================
@@ -1186,8 +1072,6 @@ def add_marketcap_and_interference_inputs(mm):
 
     return mm
 
-
-mm = add_marketcap_and_interference_inputs(mm)
 # ============================================================
 # 聚合前排序，并提取基准大市值提示配对表
 # ============================================================
@@ -1225,8 +1109,6 @@ def prepare_pattern_cue_pairs(mm):
 
     return mm, cue_pairs
 
-
-mm, cue_pairs = prepare_pattern_cue_pairs(mm)
 # ============================================================
 # Collapse data
 # 当前 mm 层级：Stkcd × event_Trddt × StkcdRecall
@@ -1479,11 +1361,6 @@ def collapse_pattern_cues(mm, denominator_mode):
     return collapsed
 
 
-collapsed = collapse_pattern_cues(
-    mm=mm,
-    denominator_mode=config["SUE_DENOMINATOR_MODE"],
-)
-
 # ============================================================
 # 精简提示事件表并保存，供后续日度面板合并
 # ============================================================
@@ -1531,14 +1408,6 @@ def save_pattern_cue_events(collapsed, output_path):
 
     return cue_events_for_panel
 
-
-cue_events_for_panel = save_pattern_cue_events(
-    collapsed=collapsed,
-    output_path=paths["cue_events_out_path"],
-)
-
-del mm, mm_key,  collapsed
-gc.collect()
 
 
 #===============================================================================
@@ -1623,10 +1492,6 @@ def load_pattern_daily_panel(daily_panel_path):
 
     return daily_panel
 
-
-TRD_Dalyr = load_pattern_daily_panel(
-    TRD_Dalyr_DGTW_path
-)
 # ============================================================
 # 将自身公告日映射到事件交易日，并生成 ownEA
 # ============================================================
@@ -1749,12 +1614,6 @@ def add_own_earnings_announcement_flag(
 
     return daily_panel
 
-
-TRD_Dalyr = add_own_earnings_announcement_flag(
-    daily_panel=TRD_Dalyr,
-    report_path=IAR_Rept_path,
-    event_date_mode=config["EVENT_DATE_MODE"],
-)
 # ============================================================
 # 构造自身公告日前后交易日窗口控制变量
 # ============================================================
@@ -1853,11 +1712,6 @@ def add_own_ea_windows(daily_panel, window=10):
 
     return daily_panel
 
-
-TRD_Dalyr = add_own_ea_windows(
-    daily_panel=TRD_Dalyr,
-    window=10,
-)
 
 # ============================================================
 # 合并自身业绩预告和专题事件控制变量
@@ -1969,323 +1823,456 @@ def merge_own_event_controls(
         .astype("int8")
     )
 
-    # 保持后续回归使用的变量名称。
-    daily_panel["ownMajorDisclosure"] = (
-        daily_panel["ownOtherEventER"]
-        .astype("int8")
-    )
-
-    daily_panel["ownPerformanceForecast"] = (
-        daily_panel["ownPerformanceForecastBrief"]
-        .astype("int8")
-    )
-
+        # 直接使用来源变量进行统计和后续回归。
     print(
-        "ownMajorDisclosure=1 数量：",
-        daily_panel["ownMajorDisclosure"].sum(),
+        "专题事件控制变量为1的数量：",
+        daily_panel["ownOtherEventER"].sum(),
     )
     print(
-        "ownPerformanceForecast=1 数量：",
-        daily_panel["ownPerformanceForecast"].sum(),
+        "业绩预告或快报控制变量为1的数量：",
+        daily_panel["ownPerformanceForecastBrief"].sum(),
     )
     print(
-        "ownMajorDisclosure 与 ownPerformanceForecast "
-        "同时为1数量：",
+        "两类自身事件控制变量同时为1的数量：",
         (
-            daily_panel["ownMajorDisclosure"].eq(1)
-            & daily_panel["ownPerformanceForecast"].eq(1)
+            daily_panel["ownOtherEventER"].eq(1)
+            & daily_panel["ownPerformanceForecastBrief"].eq(1)
         ).sum(),
     )
 
     return daily_panel
 
 
-TRD_Dalyr = merge_own_event_controls(
-    daily_panel=TRD_Dalyr,
-    performance_forecast_path=performance_forecast_controls_path,
-    other_event_path=other_event_controls_path,
-)
+# ============================================================
+# 合并上游真实交易日新闻控制变量
+# ============================================================
 
+def merge_news_controls(daily_panel, news_path):
+    """读取并合并真实交易日新闻控制变量。"""
 
-#===============================================================================
-# 合并上游已构造的真实交易日新闻控制变量
-#===============================================================================
-
-AES_AEV_controls = pd.read_csv(
-    AES_AEV_controls_path,
-    encoding='utf-8-sig',
-    usecols=[
-        'Stkcd',
-        'date',
-        'AES',
-        'AEV',
-        'aesIncrease',
-        'aesDecrease',
-        'logIncreaseAEV',
-        'logDecreaseAEV',
-    ],
-    dtype={'Stkcd': 'string'},
-    parse_dates=['date']
-)
-
-AES_AEV_controls['Stkcd'] = AES_AEV_controls['Stkcd'].apply(
-    normalize_stock_code
-)
-
-AES_AEV_controls = AES_AEV_controls.rename(columns={
-    'Stkcd': 'StkcdRecall',
-    'date': 'Trddt'
-})
-
-TRD_Dalyr['Trddt'] = pd.to_datetime(TRD_Dalyr['Trddt'])
-AES_AEV_controls['Trddt'] = pd.to_datetime(AES_AEV_controls['Trddt'])
-
-# 检查上游控制表是否在 股票-真实交易日 层面唯一
-dup_news = AES_AEV_controls.duplicated(['StkcdRecall', 'Trddt']).sum()
-print('真实交易日新闻控制表中 StkcdRecall-Trddt 重复数：', dup_news)
-
-if dup_news != 0:
-    raise ValueError(
-        '真实交易日新闻控制表在 StkcdRecall-Trddt 层面不唯一，请先检查上游构造。'
+    news_controls = pd.read_csv(
+        news_path,
+        encoding="utf-8-sig",
+        usecols=[
+            "Stkcd",
+            "date",
+            "AES",
+            "AEV",
+            "aesIncrease",
+            "aesDecrease",
+            "logIncreaseAEV",
+            "logDecreaseAEV",
+        ],
+        dtype={"Stkcd": "string"},
+        parse_dates=["date"],
     )
 
-news_numeric_cols = [
-    'AES',
-    'AEV',
-    'aesIncrease',
-    'aesDecrease',
-    'logIncreaseAEV',
-    'logDecreaseAEV',
-]
-AES_AEV_controls[news_numeric_cols] = AES_AEV_controls[news_numeric_cols].apply(
-    pd.to_numeric,
-    errors='raise',
-)
+    news_controls["Stkcd"] = (
+        news_controls["Stkcd"]
+        .apply(normalize_stock_code)
+    )
 
-if (AES_AEV_controls['AEV'].dropna() < 0).any():
-    raise ValueError('真实交易日新闻控制表中的 AEV 不应出现负数。')
+    news_controls = news_controls.rename(
+        columns={
+            "Stkcd": "StkcdRecall",
+            "date": "Trddt",
+        }
+    )
 
-print('真实交易日新闻控制表行数：', len(AES_AEV_controls))
+    daily_panel["Trddt"] = pd.to_datetime(
+        daily_panel["Trddt"],
+        errors="coerce",
+    )
+    news_controls["Trddt"] = pd.to_datetime(
+        news_controls["Trddt"],
+        errors="coerce",
+    )
 
-# 正式合并
-TRD_Dalyr = TRD_Dalyr.merge(
-    AES_AEV_controls,
-    on=['StkcdRecall', 'Trddt'],
-    how='left',
-    validate='1:1'
-)
-del AES_AEV_controls
-gc.collect()
+    news_key_missing = (
+        news_controls["StkcdRecall"].eq("")
+        | news_controls["StkcdRecall"].isna()
+        | news_controls["Trddt"].isna()
+    ).sum()
 
-print('合并真实交易日 AES/AEV 控制变量后 TRD_Dalyr 表结构：', TRD_Dalyr.shape)
-for news_col in news_numeric_cols:
-    print(f'{news_col} 非缺失数量：', TRD_Dalyr[news_col].notna().sum())
+    news_key_duplicate = news_controls.duplicated(
+        ["StkcdRecall", "Trddt"]
+    ).sum()
 
-print("媒体控制变量汇总：")
-print(TRD_Dalyr[
-    [
+    print(
+        "新闻控制表缺失键数：",
+        news_key_missing,
+        "，重复键数：",
+        news_key_duplicate,
+    )
+
+    if news_key_missing != 0 or news_key_duplicate != 0:
+        raise ValueError(
+            "新闻控制表在 StkcdRecall-Trddt 层面存在缺失或重复。"
+        )
+
+    panel_key_missing = (
+        daily_panel["StkcdRecall"].eq("")
+        | daily_panel["StkcdRecall"].isna()
+        | daily_panel["Trddt"].isna()
+    ).sum()
+
+    panel_key_duplicate = daily_panel.duplicated(
+        ["StkcdRecall", "Trddt"]
+    ).sum()
+
+    if panel_key_missing != 0 or panel_key_duplicate != 0:
+        raise ValueError(
+            "日度主面板在 StkcdRecall-Trddt 层面存在缺失或重复。"
+        )
+
+    news_numeric_cols = [
+        "AES",
+        "AEV",
         "aesIncrease",
         "aesDecrease",
         "logIncreaseAEV",
-        "logDecreaseAEV"
+        "logDecreaseAEV",
     ]
-].describe())
 
-#===============================================================================
-# 合并 collapse 后的 cue 事件表
-# 当前主面板：TRD_Dalyr，层级 StkcdRecall × Trddt
-# cue 表：cue_events_for_panel，层级 StkcdRecall × date
-#===============================================================================
-
-try:
-    cue_panel = cue_events_for_panel.copy()
-except NameError:
-    cue_panel = pd.read_csv(
-        cue_events_out_path,
-        encoding="utf-8-sig",
-        parse_dates=["date"],
-        dtype={"StkcdRecall": "string"}
+    news_controls[news_numeric_cols] = (
+        news_controls[news_numeric_cols]
+        .apply(pd.to_numeric, errors="raise")
     )
-    cue_panel["StkcdRecall"] = cue_panel["StkcdRecall"].apply(normalize_stock_code)
 
-TRD_Dalyr["Trddt"] = pd.to_datetime(TRD_Dalyr["Trddt"])
-cue_panel["date"] = pd.to_datetime(cue_panel["date"])
+    if (news_controls["AEV"].dropna() < 0).any():
+        raise ValueError(
+            "真实交易日新闻控制表中的 AEV 不应出现负数。"
+        )
 
-# 检查主面板唯一性
-dup_main = TRD_Dalyr.duplicated(["StkcdRecall", "Trddt"]).sum()
-print("TRD_Dalyr 中 StkcdRecall-Trddt 重复数：", dup_main)
+    # 统计新闻表中无法匹配日度主面板的公司—交易日。
+    panel_keys = (
+        daily_panel[["StkcdRecall", "Trddt"]]
+        .drop_duplicates()
+    )
 
-if dup_main != 0:
-    raise ValueError("TRD_Dalyr 中 StkcdRecall-Trddt 不唯一，请先检查主面板。")
+    unmatched_news = (
+        news_controls[["StkcdRecall", "Trddt"]]
+        .merge(
+            panel_keys,
+            on=["StkcdRecall", "Trddt"],
+            how="left",
+            indicator=True,
+        )
+        .loc[lambda data: data["_merge"].eq("left_only")]
+    )
 
-# 检查 cue 表唯一性
-dup_cue = cue_panel.duplicated(["StkcdRecall", "date"]).sum()
-print("cue_panel 中 StkcdRecall-date 重复数：", dup_cue)
+    unmatched_rate = (
+        len(unmatched_news) / len(news_controls)
+        if len(news_controls) != 0
+        else np.nan
+    )
 
-if dup_cue != 0:
-    raise ValueError("cue_panel 中 StkcdRecall-date 不唯一，请检查 collapse 步骤。")
+    print("真实交易日新闻控制表行数：", len(news_controls))
+    print("无法匹配日度主面板的新闻键数：", len(unmatched_news))
+    print("无法匹配比例：", unmatched_rate)
 
-print("cue 事件总数：", len(cue_panel))
+    daily_panel = daily_panel.merge(
+        news_controls,
+        on=["StkcdRecall", "Trddt"],
+        how="left",
+        validate="one_to_one",
+    )
 
-# 正式合并
-TRD_Dalyr = TRD_Dalyr.merge(
-    cue_panel,
-    left_on=["StkcdRecall", "Trddt"],
-    right_on=["StkcdRecall", "date"],
-    how="left",
-    validate="1:1"
-)
-matched_cue_count = TRD_Dalyr["date"].notna().sum()
-print("cue 能匹配到日度主面板数量：", matched_cue_count)
-print("cue 匹配不到日度主面板数量：", len(cue_panel) - matched_cue_count)
-del cue_panel
-TRD_Dalyr = TRD_Dalyr.drop(columns=["date"], errors="ignore")
+    print(
+        "合并真实交易日新闻控制变量后表结构：",
+        daily_panel.shape,
+    )
 
-print("合并 cue 事件后的 TRD_Dalyr 表结构：", TRD_Dalyr.shape)
-print("合并后 StkcdRecall-Trddt 重复数：",
-      TRD_Dalyr.duplicated(["StkcdRecall", "Trddt"]).sum())
+    for news_col in news_numeric_cols:
+        print(
+            f"{news_col} 非缺失数量：",
+            daily_panel[news_col].notna().sum(),
+        )
 
-#===============================================================================
-# 没有 cue 的日期，将 cue dummy 缺失值设为 0
-#===============================================================================
+    print("媒体控制变量汇总：")
+    print(
+        daily_panel[
+            [
+                "aesIncrease",
+                "aesDecrease",
+                "logIncreaseAEV",
+                "logDecreaseAEV",
+            ]
+        ].describe()
+    )
 
-cue_dummy_cols = [
-    "quarterLag1size90plus",
-    "quarterLag1size50_90",
-    "quarterLag1size10_50",
-    "quarterLag1size10minus",
+    return daily_panel
 
-    "lag1hiAEVsize90plus",
-    "lag1hiavolsize90plus",
-    "lag1hiavolSsize90plus",
-    "lag1hiAEVsize50_90",
-    "lag1hiavolsize50_90",
-    "lag1hiavolSsize50_90",
 
-    "lag1hi_sue1_abssize90plus",
-    "lag1hi_sue2_abssize90plus",
-    "lag1hi_sue3_abssize90plus",
-    "lag1hi_sue1_abssize50_90",
-    "lag1hi_sue2_abssize50_90",
-    "lag1hi_sue3_abssize50_90",
+# ============================================================
+# 将聚合后的提示事件表合并到日度主面板
+# ============================================================
 
-    "lag1sue1possize90plus",
-    "lag1sue2possize90plus",
-    "lag1sue3possize90plus",
-    "lag1sue1possize50_90",
-    "lag1sue2possize50_90",
-    "lag1sue3possize50_90",
+def merge_pattern_cue_events(
+    daily_panel,
+    cue_events_path,
+    cue_events=None,
+):
+    """合并提示事件指标，保持被提示公司与交易日层面的行粒度。"""
 
-    "lag1sue1negsize90plus",
-    "lag1sue2negsize90plus",
-    "lag1sue3negsize90plus",
-    "lag1sue1negsize50_90",
-    "lag1sue2negsize50_90",
-    "lag1sue3negsize50_90",
+    # 传入事件表时直接使用；未传入时读取已保存文件。
+    if cue_events is None:
+        cue_panel = pd.read_csv(
+            cue_events_path,
+            encoding="utf-8-sig",
+            parse_dates=["date"],
+            dtype={"StkcdRecall": "string"},
+        )
+        cue_panel["StkcdRecall"] = (
+            cue_panel["StkcdRecall"]
+            .apply(normalize_stock_code)
+        )
+    else:
+        cue_panel = cue_events.copy()
 
-    "lag1hi_sue1_possize90plus",
-    "lag1hi_sue2_possize90plus",
-    "lag1hi_sue3_possize90plus",
-    "lag1hi_sue1_possize50_90",
-    "lag1hi_sue2_possize50_90",
-    "lag1hi_sue3_possize50_90",
+    daily_panel["Trddt"] = pd.to_datetime(
+        daily_panel["Trddt"]
+    )
+    cue_panel["date"] = pd.to_datetime(
+        cue_panel["date"]
+    )
 
-    "lag1hi_sue1_negsize90plus",
-    "lag1hi_sue2_negsize90plus",
-    "lag1hi_sue3_negsize90plus",
-    "lag1hi_sue1_negsize50_90",
-    "lag1hi_sue2_negsize50_90",
-    "lag1hi_sue3_negsize50_90",
+    # 检查日度主面板唯一性。
+    duplicate_main = daily_panel.duplicated(
+        ["StkcdRecall", "Trddt"]
+    ).sum()
 
-    "lag1topMoversize90plus",
-    "lag1topMoversize50_90",
-]
+    print("日度主面板重复键数量：", duplicate_main)
 
-cue_dummy_cols = [c for c in cue_dummy_cols if c in TRD_Dalyr.columns]
+    if duplicate_main != 0:
+        raise ValueError(
+            "日度主面板在被提示公司与交易日层面不唯一。"
+        )
 
-TRD_Dalyr[cue_dummy_cols] = (
-    TRD_Dalyr[cue_dummy_cols]
-    .fillna(0)
-    .astype("int8")
-)
+    # 检查聚合事件表唯一性。
+    duplicate_cue = cue_panel.duplicated(
+        ["StkcdRecall", "date"]
+    ).sum()
 
-print("cue dummy 缺失值已设为 0")
-print(TRD_Dalyr[cue_dummy_cols].sum().sort_values(ascending=False).head(20))
+    print("提示事件表重复键数量：", duplicate_cue)
 
-cue_count_cols = [
-    "nrCuesLag1S90p",
-    "nrCuesLag1S5090",
-    "nrCuesLag1S1050",
-    "nrCuesLag1S10m",
-]
+    if duplicate_cue != 0:
+        raise ValueError(
+            "提示事件表在被提示公司与事件交易日层面不唯一。"
+        )
 
-cue_count_cols = [c for c in cue_count_cols if c in TRD_Dalyr.columns]
+    print("提示事件表记录数：", len(cue_panel))
 
-TRD_Dalyr[cue_count_cols] = (
-    TRD_Dalyr[cue_count_cols]
-    .fillna(0)
-)
+    daily_panel = daily_panel.merge(
+        cue_panel,
+        left_on=["StkcdRecall", "Trddt"],
+        right_on=["StkcdRecall", "date"],
+        how="left",
+        validate="one_to_one",
+    )
 
-#===============================================================================
-# 合并特征调整收益率
-#===============================================================================
-adj = pd.read_csv(
+    matched_cue_count = (
+        daily_panel["date"].notna().sum()
+    )
+
+    print(
+        "能匹配到日度主面板的事件表记录数：",
+        matched_cue_count,
+    )
+    print(
+        "无法匹配到日度主面板的事件表记录数：",
+        len(cue_panel) - matched_cue_count,
+    )
+
+    del cue_panel
+
+    # 主面板已有交易日期，删除合并带入的日期别名。
+    daily_panel = daily_panel.drop(
+        columns=["date"],
+        errors="ignore",
+    )
+
+    print("合并提示事件后的表结构：", daily_panel.shape)
+    print(
+        "合并后被提示公司与交易日重复键数量：",
+        daily_panel.duplicated(
+            ["StkcdRecall", "Trddt"]
+        ).sum(),
+    )
+
+    return daily_panel
+
+
+# ============================================================
+# 按现有口径填补提示标记和提示数量
+# ============================================================
+
+def fill_pattern_cue_indicators(daily_panel):
+    """将提示标记和提示数量的缺失填0，保留连续指标的缺失。"""
+
+    # 当前聚合规则中的最大值项，全部是0/1提示标记。
+    # 复用同一份清单，且只处理当前表中已有的列。
+    agg_specs = build_pattern_cue_agg_specs(
+        daily_panel.columns
+    )
+
+    cue_dummy_cols = [
+        col
+        for col, (_, aggregation) in agg_specs.items()
+        if aggregation == "max"
+    ]
+
+    daily_panel[cue_dummy_cols] = (
+        daily_panel[cue_dummy_cols]
+        .fillna(0)
+        .astype("int8")
+    )
+
+    print("提示标记缺失值已设为0")
+    print(
+        daily_panel[cue_dummy_cols]
+        .sum()
+        .sort_values(ascending=False)
+        .head(20)
+    )
+
+    cue_count_cols = [
+        "nrCuesLag1S90p",
+        "nrCuesLag1S5090",
+        "nrCuesLag1S1050",
+        "nrCuesLag1S10m",
+    ]
+
+    cue_count_cols = [
+        col for col in cue_count_cols
+        if col in daily_panel.columns
+    ]
+
+    daily_panel[cue_count_cols] = (
+        daily_panel[cue_count_cols]
+        .fillna(0)
+    )
+
+    return daily_panel
+
+
+# ============================================================
+# 合并被提示公司的特征调整收益率
+# ============================================================
+
+def merge_adjusted_returns(
+    daily_panel,
     adjusted_return_path,
-    encoding="utf-8-sig",
-    dtype=(
-        {"Stkcd": "string", "portfolioNumber": "float32"}
-        | {
-            column: "float32"
-            for column in (
-                ["chAdj_ret_tm3", "chAdj_ret_tm2", "chAdj_ret_tm1", "chAdj_ret_t"]
-                + [f"chAdj_ret_t_t{i}" for i in range(1, 51)]
-            )
-        }
-    ),
-    parse_dates=["Trddt"]
-)
+):
+    """读取上游特征调整收益率，并合并到日度主面板。"""
 
-adj["Stkcd"] = adj["Stkcd"].apply(normalize_stock_code)
+    base_return_cols = [
+        "chAdj_ret_tm3",
+        "chAdj_ret_tm2",
+        "chAdj_ret_tm1",
+        "chAdj_ret_t",
+    ]
 
-adj = adj.rename(columns={
-    "Stkcd": "StkcdRecall",
-    "chAdj_ret_tm3": "chAdjreturn_tm3_Recall",
-    "chAdj_ret_tm2": "chAdjreturn_tm2_Recall",
-    "chAdj_ret_tm1": "chAdjreturn_tm1_Recall",
-    "chAdj_ret_t": "chAdjreturn_t_Recall",
-})
+    forward_return_cols = [
+        f"chAdj_ret_t_t{i}"
+        for i in range(1, 51)
+    ]
 
-rename_forward = {
-    f"chAdj_ret_t_t{i}": f"chAdjreturn_t_tp{i}_Recall"
-    for i in range(1, 51)
-}
-adj = adj.rename(columns=rename_forward)
+    adjusted_returns = pd.read_csv(
+        adjusted_return_path,
+        encoding="utf-8-sig",
+        dtype=(
+            {
+                "Stkcd": "string",
+                "portfolioNumber": "float32",
+            }
+            | {
+                column: "float32"
+                for column in (
+                    base_return_cols + forward_return_cols
+                )
+            }
+        ),
+        parse_dates=["Trddt"],
+    )
 
-keep_adj_cols = (
-    ["StkcdRecall", "Trddt", "portfolioNumber"]
-    + [c for c in adj.columns if c.startswith("chAdjreturn_")]
-)
+    adjusted_returns["Stkcd"] = (
+        adjusted_returns["Stkcd"]
+        .apply(normalize_stock_code)
+    )
 
-adj = adj[keep_adj_cols].copy()
+    return_rename = {
+        "Stkcd": "StkcdRecall",
+        "chAdj_ret_tm3": "chAdjreturn_tm3_Recall",
+        "chAdj_ret_tm2": "chAdjreturn_tm2_Recall",
+        "chAdj_ret_tm1": "chAdjreturn_tm1_Recall",
+        "chAdj_ret_t": "chAdjreturn_t_Recall",
+    }
 
-dup_adj = adj.duplicated(["StkcdRecall", "Trddt"]).sum()
-print("DGTW特征调整收益率 StkcdRecall-Trddt 重复数：", dup_adj)
-if dup_adj != 0:
-    raise ValueError("DGTW特征调整收益率在 StkcdRecall-Trddt 层面不唯一。")
+    return_rename.update({
+        f"chAdj_ret_t_t{i}": f"chAdjreturn_t_tp{i}_Recall"
+        for i in range(1, 51)
+    })
 
-TRD_Dalyr = TRD_Dalyr.merge(
-    adj,
-    on=["StkcdRecall", "Trddt"],
-    how="left",
-    validate="1:1",
-)
-del adj
-gc.collect()
+    adjusted_returns = adjusted_returns.rename(
+        columns=return_rename
+    )
 
-print("合并特征调整收益率后表结构：", TRD_Dalyr.shape)
-print("chAdjreturn_t_Recall 缺失比例：", TRD_Dalyr["chAdjreturn_t_Recall"].isna().mean())
-print("chAdjreturn_t_tp1_Recall 缺失比例：", TRD_Dalyr["chAdjreturn_t_tp1_Recall"].isna().mean())
-print("chAdjreturn_t_tp10_Recall 缺失比例：", TRD_Dalyr["chAdjreturn_t_tp10_Recall"].isna().mean())
+    keep_adj_cols = (
+        ["StkcdRecall", "Trddt", "portfolioNumber"]
+        + [
+            col for col in adjusted_returns.columns
+            if col.startswith("chAdjreturn_")
+        ]
+    )
+
+    adjusted_returns = (
+        adjusted_returns[keep_adj_cols].copy()
+    )
+
+    duplicate_count = adjusted_returns.duplicated(
+        ["StkcdRecall", "Trddt"]
+    ).sum()
+
+    print(
+        "特征调整收益率表重复键数量：",
+        duplicate_count,
+    )
+
+    if duplicate_count != 0:
+        raise ValueError(
+            "特征调整收益率在被提示公司与交易日层面不唯一。"
+        )
+
+    daily_panel = daily_panel.merge(
+        adjusted_returns,
+        on=["StkcdRecall", "Trddt"],
+        how="left",
+        validate="one_to_one",
+    )
+
+    del adjusted_returns
+    gc.collect()
+
+    print(
+        "合并特征调整收益率后表结构：",
+        daily_panel.shape,
+    )
+
+    check_cols = [
+        "chAdjreturn_t_Recall",
+        "chAdjreturn_t_tp1_Recall",
+        "chAdjreturn_t_tp10_Recall",
+    ]
+
+    for col in check_cols:
+        print(
+            f"{col} 缺失比例：",
+            daily_panel[col].isna().mean(),
+        )
+
+    return daily_panel
+
 
 #===============================================================================
 # 最终整理样本并进行缩尾
@@ -2293,10 +2280,6 @@ print("chAdjreturn_t_tp10_Recall 缺失比例：", TRD_Dalyr["chAdjreturn_t_tp10
 
 # 构造 interference 高低组虚拟变量
 # interference 衡量同一个 cue 场景中同时出现的其他公告数量
-
-# 只是兜底的写法，防止没有year这一列
-if "year" not in TRD_Dalyr.columns:
-    TRD_Dalyr["year"] = TRD_Dalyr["Trddt"].dt.year
 
 def by_year_xtile_2(df, value_col, year_col="year"):
     """
@@ -2330,29 +2313,48 @@ def by_year_xtile_2(df, value_col, year_col="year"):
 
     return df.groupby(year_col, group_keys=False)[value_col].apply(_split_one_year)
 
-# 当前只对 lag1 构造，但循环写法可以扩展到其他 lag
-for i in range(1, 2):
-    # (1) 等权版本：对所有 cue 等权平均
-    for suffix in ["S90p", "S5090"]:
-        value_col = f"nrFirmsAnnLag{i}EW{suffix}"
-        group_col = f"interferenceGroupEWLag{i}{suffix}"
-        low_col = f"lowInterferenceEWLag{i}{suffix}"
-        high_col = f"highInterferenceEWLag{i}{suffix}"
+# ============================================================
+# 构造干扰指标的年度高低分组
+# ============================================================
 
-        TRD_Dalyr[group_col] = by_year_xtile_2(TRD_Dalyr, value_col)
-        TRD_Dalyr[low_col] = (TRD_Dalyr[group_col] == 1).astype("int8")
-        TRD_Dalyr[high_col] = (TRD_Dalyr[group_col] == 2).astype("int8")
+def add_interference_groups(daily_panel):
+    """按年份划分干扰指标高低组，并生成对应标记。"""
 
-    # (2) 市值加权版本：按照提示公司市值给 cue 加权
-    for suffix in ["S90p", "S5090"]:
-        value_col = f"nrFirmsAnnLag{i}VW{suffix}"
-        group_col = f"interferenceGroupVWLag{i}{suffix}"
-        low_col = f"lowInterferenceVWLag{i}{suffix}"
-        high_col = f"highInterferenceVWLag{i}{suffix}"
+    if "year" not in daily_panel.columns:
+        daily_panel["year"] = daily_panel["Trddt"].dt.year
 
-        TRD_Dalyr[group_col] = by_year_xtile_2(TRD_Dalyr, value_col)
-        TRD_Dalyr[low_col] = (TRD_Dalyr[group_col] == 1).astype("int8")
-        TRD_Dalyr[high_col] = (TRD_Dalyr[group_col] == 2).astype("int8")
+    # 当前使用上一季度关系对应的干扰指标。
+    for i in range(1, 2):
+        for weight in ["EW", "VW"]:
+            for suffix in ["S90p", "S5090"]:
+                value_col = (
+                    f"nrFirmsAnnLag{i}{weight}{suffix}"
+                )
+                group_col = (
+                    f"interferenceGroup{weight}Lag{i}{suffix}"
+                )
+                low_col = (
+                    f"lowInterference{weight}Lag{i}{suffix}"
+                )
+                high_col = (
+                    f"highInterference{weight}Lag{i}{suffix}"
+                )
+
+                daily_panel[group_col] = by_year_xtile_2(
+                    daily_panel,
+                    value_col,
+                    year_col="year",
+                )
+
+                daily_panel[low_col] = (
+                    daily_panel[group_col] == 1
+                ).astype("int8")
+
+                daily_panel[high_col] = (
+                    daily_panel[group_col] == 2
+                ).astype("int8")
+
+    return daily_panel
 
 
 # 把 cue 的盈余惊喜变量分成五分位
@@ -2376,36 +2378,65 @@ def xtile_nq(series, q):
     return out
 
 
-# 当前只处理 lag1，但循环可以扩展到其他 lag
-for i in range(1, 2):
-    for sue_id in [1, 2, 3]:
-        TRD_Dalyr[f"sue{sue_id}CueLag{i}VWS90p_quintile"] = xtile_nq(
-            TRD_Dalyr[f"sue{sue_id}CueLag{i}S90pVW"],
-            q=5
-        )# 大市值 cue 的市值加权盈余惊喜五分位
+# ============================================================
+# 构造提示公司盈余惊喜均值的五分位组
+# ============================================================
 
-        TRD_Dalyr[f"sue{sue_id}CueLag{i}EWS90p_quintile"] = xtile_nq(
-            TRD_Dalyr[f"sue{sue_id}CueLag{i}S90pEW"],
-            q=5
-        )# 大市值 cue 的等权盈余惊喜五分位
+def add_sue_cue_quantiles(daily_panel):
+    """将三种提示盈余惊喜均值分别划分为五分位组。"""
 
-TRD_Dalyr["marketCap_Minus3_Recall"] = TRD_Dalyr["mktcap_tm3"]
+    for i in range(1, 2):
+        for sue_id in [1, 2, 3]:
+            for weight in ["VW", "EW"]:
+                value_col = (
+                    f"sue{sue_id}CueLag{i}S90p{weight}"
+                )
+                group_col = (
+                    f"sue{sue_id}CueLag{i}{weight}S90p_quintile"
+                )
 
-TRD_Dalyr["marketCap_Minus3_Recall_medGr"] = by_year_xtile_2(
-    TRD_Dalyr,
-    "marketCap_Minus3_Recall",
-    year_col="year"
-) # 按年份把被提示公司市值分成高低两组
+                daily_panel[group_col] = xtile_nq(
+                    daily_panel[value_col],
+                    q=5,
+                )
 
-TRD_Dalyr["smallFirm"] = (
-    TRD_Dalyr["marketCap_Minus3_Recall_medGr"] == 1
-).astype("int8") # 如果被提示公司市值低于当年中位数，则 smallFirm = 1
+    return daily_panel
+
+
+
+# ============================================================
+# 构造被提示公司的年度规模分组
+# ============================================================
+
+def add_recalled_firm_size_group(daily_panel):
+    """按年度划分被提示公司规模组，并生成小公司标记。"""
+
+    # 保留最终输出使用的被提示公司市值名称。
+    daily_panel["marketCap_Minus3_Recall"] = (
+        daily_panel["mktcap_tm3"]
+    )
+
+    daily_panel["marketCap_Minus3_Recall_medGr"] = (
+        by_year_xtile_2(
+            daily_panel,
+            "marketCap_Minus3_Recall",
+            year_col="year",
+        )
+    )
+
+    daily_panel["smallFirm"] = (
+        daily_panel["marketCap_Minus3_Recall_medGr"] == 1
+    ).astype("int8")
+
+    return daily_panel
+
+
 
 
 # 缩尾方式是：全样本 1% winsorize（缩尾），不是按年份缩尾。
 # 也就是把变量低于第 1 百分位的值替换为第 1 百分位，把高于第 99 百分位的值替换为第 99 百分位，
 # 原变量保留，新生成 _w 变量。
-print("开始缩尾......")
+
 def winsorize_limits(s, p=0.01):
     """
     只计算缩尾阈值，不立刻生成缩尾后的整列。
@@ -2415,66 +2446,95 @@ def winsorize_limits(s, p=0.01):
     return lower, upper
 
 
-def add_winsor_col(df, col):
-    """
-    使用预先在全样本上算好的缩尾阈值生成 _w 变量。
-    """
+def add_winsor_col(df, col, winsor_limits):
+    """使用传入的全样本缩尾阈值，生成缩尾后的变量。"""
+
     lower, upper = winsor_limits[col]
-    df[f"{col}_w"] = df[col].clip(lower=lower, upper=upper)
+    df[f"{col}_w"] = df[col].clip(
+        lower=lower,
+        upper=upper,
+    )
 
 
-# 对主要因变量进行 1% winsorize
-dep_vars = [
-    "chAdjreturn_tm3_Recall",
-    "chAdjreturn_tm2_Recall",
-    "chAdjreturn_tm1_Recall",
-    "chAdjreturn_t_Recall",
-]
+def compute_pattern_winsor_limits(daily_panel, p=0.01):
+    """在筛选基准样本前，计算全样本缩尾阈值及对应变量清单。"""
 
-dep_vars += [
-    f"chAdjreturn_t_tp{i}_Recall"
-    for i in range(1, 51)
-]
+    # 调整后收益率：事件前各日、事件当日及后续累计窗口。
+    dep_vars = [
+        "chAdjreturn_tm3_Recall",
+        "chAdjreturn_tm2_Recall",
+        "chAdjreturn_tm1_Recall",
+        "chAdjreturn_t_Recall",
+    ]
 
-# 对 cue 盈余惊喜变量进行 1% winsorize
-sue_winsor_cols = []
-for i in range(1, 2):
-    for sue_id in [1, 2, 3]:
-        for weight in ["VW", "EW"]:
-            sue_winsor_cols.append(f"sue{sue_id}CueLag{i}S90p{weight}")
+    dep_vars += [
+        f"chAdjreturn_t_tp{i}_Recall"
+        for i in range(1, 51)
+    ]
 
-# 原文缩尾变量清单：收益率窗口 + cue 盈余惊喜
-winsor_source_cols = [
-    col
-    for col in dep_vars + sue_winsor_cols
-    if col in TRD_Dalyr.columns
-]
+    # 提示公司盈余惊喜：三种指标，各有市值加权和等权口径。
+    sue_winsor_cols = []
+    for i in range(1, 2):
+        for sue_id in [1, 2, 3]:
+            for weight in ["VW", "EW"]:
+                sue_winsor_cols.append(
+                    f"sue{sue_id}CueLag{i}S90p{weight}"
+                )
 
-# 注意：阈值仍然在筛基准样本前的全样本上计算
-winsor_limits = {}
-for col in winsor_source_cols:
-    winsor_limits[col] = winsorize_limits(TRD_Dalyr[col], p=0.01)
+    # 只为当前表中实际存在的变量计算阈值。
+    winsor_source_cols = [
+        col
+        for col in dep_vars + sue_winsor_cols
+        if col in daily_panel.columns
+    ]
 
-# 筛基准样本前，只先生成后面马上要用的两个因变量缩尾列
-for col in ["chAdjreturn_t_tp1_Recall", "chAdjreturn_t_tp10_Recall"]:
-    if col in winsor_limits:
-        add_winsor_col(TRD_Dalyr, col)
+    winsor_limits = {}
+    for col in winsor_source_cols:
+        winsor_limits[col] = winsorize_limits(
+            daily_panel[col],
+            p=p,
+        )
 
-# 生成日历季度和年度-季度固定效应变量
-TRD_Dalyr["quarter"] = TRD_Dalyr["Trddt"].dt.quarter
-TRD_Dalyr["yearQuarter"] = TRD_Dalyr["Trddt"].dt.to_period("Q")
+    return winsor_limits, winsor_source_cols
 
 
 
-# 按被提示公司和日期排序，并把核心标识变量放在前面
-front_cols = ["StkcdRecall", "Trddt"]
-other_cols = [c for c in TRD_Dalyr.columns if c not in front_cols]
+def prepare_pattern_baseline_inputs(daily_panel, winsor_limits):
+    """准备基准回归所需的缩尾因变量和季度标识，并整理表结构。"""
 
-TRD_Dalyr = (
-    TRD_Dalyr[front_cols + other_cols]
-    .sort_values(["StkcdRecall", "Trddt"])
-    .reset_index(drop=True)
-)
+    # 使用已经算好的阈值，先生成两个基准因变量的缩尾列。
+    for col in [
+        "chAdjreturn_t_tp1_Recall",
+        "chAdjreturn_t_tp10_Recall",
+    ]:
+        if col in winsor_limits:
+            add_winsor_col(
+                df=daily_panel,
+                col=col,
+                winsor_limits=winsor_limits,
+            )
+
+    # 生成日历季度和年度—季度固定效应标识。
+    daily_panel["quarter"] = daily_panel["Trddt"].dt.quarter
+    daily_panel["yearQuarter"] = (
+        daily_panel["Trddt"].dt.to_period("Q")
+    )
+
+    # 核心标识列放在最前面，并按被提示公司和日期排序。
+    front_cols = ["StkcdRecall", "Trddt"]
+    other_cols = [
+        col
+        for col in daily_panel.columns
+        if col not in front_cols
+    ]
+
+    return (
+        daily_panel[front_cols + other_cols]
+        .sort_values(["StkcdRecall", "Trddt"])
+        .reset_index(drop=True)
+    )
+
+
 
 def baseline_regression_sample_mask(df, dep_col, rhs_cols, fe_cols, cluster_cols=None):
     """
@@ -2504,323 +2564,662 @@ def baseline_regression_sample_mask(df, dep_col, rhs_cols, fe_cols, cluster_cols
     return out
 
 
-# 准备控制变量
-own_ea_cols = (
-    [f"ownEA_tm{i}" for i in range(10, 0, -1)]
-    + ["ownEA"]
-    + [f"ownEA_tp{i}" for i in range(1, 11)]
-)
+def filter_pattern_baseline_sample(daily_panel):
+    """按当前规则，依次筛选两个基准回归所需的样本。"""
 
-own_disclosure_cols = [
-    "ownMajorDisclosure",
-    "ownPerformanceForecast",
-]
+    # 被提示公司自身财报公告及前后交易日标记。
+    own_ea_cols = (
+        [f"ownEA_tm{i}" for i in range(10, 0, -1)]
+        + ["ownEA"]
+        + [f"ownEA_tp{i}" for i in range(1, 11)]
+    )
 
-baseline_rhs = (
-    ["quarterLag1size90plus"]
-    + own_ea_cols
-    + own_disclosure_cols
-    + ["aesIncrease", "aesDecrease", "logIncreaseAEV", "logDecreaseAEV"]
-)
+    # 被提示公司自身专题事件、业绩预告或快报。
+    own_disclosure_cols = [
+        "ownOtherEventER",
+        "ownPerformanceForecastBrief",
+    ]
 
-# [t, t+1] 基准回归样本
-mask_tp1 = baseline_regression_sample_mask(
-    TRD_Dalyr,
-    dep_col="chAdjreturn_t_tp1_Recall_w",
-    rhs_cols=baseline_rhs,
-    fe_cols=["StkcdRecall", "yearQuarter"],
-    cluster_cols=["StkcdRecall", "Trddt"],
-)
+    # 两个基准回归使用相同的解释变量。
+    baseline_rhs = (
+        ["quarterLag1size90plus"]
+        + own_ea_cols
+        + own_disclosure_cols
+        + [
+            "aesIncrease",
+            "aesDecrease",
+            "logIncreaseAEV",
+            "logDecreaseAEV",
+        ]
+    )
 
-TRD_Dalyr = TRD_Dalyr.loc[mask_tp1].copy()
+    # 先筛选事件日至后第1个交易日的样本，
+    # 再在剩余样本中筛选事件日至后第10个交易日的样本。
+    for dep_col in [
+        "chAdjreturn_t_tp1_Recall_w",
+        "chAdjreturn_t_tp10_Recall_w",
+    ]:
+        sample_mask = baseline_regression_sample_mask(
+            df=daily_panel,
+            dep_col=dep_col,
+            rhs_cols=baseline_rhs,
+            fe_cols=["StkcdRecall", "yearQuarter"],
+            cluster_cols=["StkcdRecall", "Trddt"],
+        )
 
+        daily_panel = daily_panel.loc[sample_mask].copy()
 
-# [t, t+10] 基准回归样本
-mask_tp10 = baseline_regression_sample_mask(
-    TRD_Dalyr,
-    dep_col="chAdjreturn_t_tp10_Recall_w",
-    rhs_cols=baseline_rhs,
-    fe_cols=["StkcdRecall", "yearQuarter"],
-    cluster_cols=["StkcdRecall", "Trddt"],
-)
+    return daily_panel
 
-TRD_Dalyr = TRD_Dalyr.loc[mask_tp10].copy()
 
 #===============================================================================
 # 统计：一次提示公司的公告会提示多少家被提示公司
 #===============================================================================
 
-# 一、提取最终回归样本中的“被提示公司 × 交易日”
-firm_days_in_sample = (
-    TRD_Dalyr[
-        ["StkcdRecall", "Trddt"]
-    ]
-    .drop_duplicates()
-    .copy()
-)
+def summarize_pattern_cue_reach(daily_panel, cue_pairs):
+    """统计最终基准样本内，每个提示公司事件日提示的公司数量。"""
 
-# 二、使用记忆矩阵折叠前提取的基准大市值提示事件配对表。
-
-# 三、只保留确实存在于最终回归样本中的被提示公司日
-cue_pairs_final_sample = cue_pairs.merge(
-    firm_days_in_sample,
-    on=["StkcdRecall", "Trddt"],
-    how="inner",
-    validate="many_to_one",
-)
-
-# 四、检查“提示公司 × 日期 × 被提示公司”是否唯一
-duplicate_count = cue_pairs_final_sample.duplicated(
-    ["Stkcd", "Trddt", "StkcdRecall"]
-).sum()
-
-if duplicate_count != 0:
-    raise ValueError(
-        "提示公司、日期和被提示公司的组合存在重复，请先检查配对明细。"
+    # 提取最终基准样本中的被提示公司日。
+    firm_days_in_sample = (
+        daily_panel[["StkcdRecall", "Trddt"]]
+        .drop_duplicates()
+        .copy()
     )
 
-# 五、按“提示公司 × 公告交易日”统计被提示公司数量
-nr_firms_cued = (
-    cue_pairs_final_sample
-    .groupby(
-        ["Stkcd", "Trddt"],
-        observed=True,
-    )["StkcdRecall"]
-    .nunique()
-    .rename("nrFirmsCued")
-)
+    # 只保留被提示公司日仍在最终样本中的基准提示配对。
+    cue_pairs_final_sample = cue_pairs.merge(
+        firm_days_in_sample,
+        on=["StkcdRecall", "Trddt"],
+        how="inner",
+        validate="many_to_one",
+    )
 
-# 六、生成与原文 summarize, detail 类似的描述性统计
-nr_firms_cued_summary = pd.Series(
-    {
-        "提示公司公告次数": nr_firms_cued.shape[0],
-        "均值": nr_firms_cued.mean(),
-        "第25百分位": nr_firms_cued.quantile(0.25),
-        "中位数": nr_firms_cued.median(),
-        "第75百分位": nr_firms_cued.quantile(0.75),
-        "标准差": nr_firms_cued.std(ddof=1),
-        "最小值": nr_firms_cued.min(),
-        "最大值": nr_firms_cued.max(),
-    },
-    name="每次公告提示的公司数量",
-)
+    # 检查提示公司、日期和被提示公司的组合是否唯一。
+    duplicate_count = cue_pairs_final_sample.duplicated(
+        ["Stkcd", "Trddt", "StkcdRecall"]
+    ).sum()
 
-print("\n一次提示公司公告会提示多少家被提示公司：")
-print(nr_firms_cued_summary)
+    if duplicate_count != 0:
+        raise ValueError(
+            "提示公司、日期和被提示公司的组合存在重复，"
+            "请先检查配对明细。"
+        )
+
+    # 每个提示公司事件日，统计不同被提示公司的数量。
+    nr_firms_cued = (
+        cue_pairs_final_sample
+        .groupby(
+            ["Stkcd", "Trddt"],
+            observed=True,
+        )["StkcdRecall"]
+        .nunique()
+        .rename("nrFirmsCued")
+    )
+
+    nr_firms_cued_summary = pd.Series(
+        {
+            "提示公司公告次数": nr_firms_cued.shape[0],
+            "均值": nr_firms_cued.mean(),
+            "第25百分位": nr_firms_cued.quantile(0.25),
+            "中位数": nr_firms_cued.median(),
+            "第75百分位": nr_firms_cued.quantile(0.75),
+            "标准差": nr_firms_cued.std(ddof=1),
+            "最小值": nr_firms_cued.min(),
+            "最大值": nr_firms_cued.max(),
+        },
+        name="每次公告提示的公司数量",
+    )
+
+    print("\n一次提示公司公告会提示多少家被提示公司：")
+    print(nr_firms_cued_summary)
+
+    return nr_firms_cued, nr_firms_cued_summary
 
 
 
+def add_remaining_pattern_winsor_cols(
+    daily_panel,
+    winsor_source_cols,
+    winsor_limits,
+):
+    """使用筛选前计算的阈值，补生成其余缩尾列。"""
 
-print("基准样本筛选后补生成其余缩尾变量......")
+    print("基准样本筛选后补生成其余缩尾变量......")
 
-for col in winsor_source_cols:
-    w_col = f"{col}_w"
-    if col in TRD_Dalyr.columns and w_col not in TRD_Dalyr.columns:
-        add_winsor_col(TRD_Dalyr, col)
+    for col in winsor_source_cols:
+        w_col = f"{col}_w"
 
-print("最终同时进入两个基准回归的样本量：", len(TRD_Dalyr))
-print("最终 cue 数量：", TRD_Dalyr["quarterLag1size90plus"].sum())
+        if (
+            col in daily_panel.columns
+            and w_col not in daily_panel.columns
+        ):
+            add_winsor_col(
+                df=daily_panel,
+                col=col,
+                winsor_limits=winsor_limits,
+            )
+
+    print(
+        "最终同时进入两个基准回归的样本量：",
+        len(daily_panel),
+    )
+    print(
+        "最终提示事件数量：",
+        daily_panel["quarterLag1size90plus"].sum(),
+    )
+
+    return daily_panel
+
 
 #===============================================================================
 # 构造 future cue 虚拟变量：cue_tp1 到 cue_tp10
 # cue_tp{i}=1 表示当前日后第 i 个交易日会发生基准 cue
 #===============================================================================
 
-# 当前主面板唯一层级应为 StkcdRecall × td
-dup_n = TRD_Dalyr.duplicated(["StkcdRecall", "td"]).sum()
-print("构造 future cue 前 StkcdRecall-td 重复数：", dup_n)
+def add_future_pattern_cue_flags(daily_panel):
+    """根据筛选后保留的基准提示事件，生成未来十个交易日标记。"""
 
-if dup_n != 0:
-    raise ValueError("TRD_Dalyr 中 StkcdRecall-td 不唯一，不能构造 future cue。")
-
-# 提取真实 cue 发生日
-cue_days = (
-    TRD_Dalyr.loc[
-        TRD_Dalyr["quarterLag1size90plus"].eq(1),
+    # 检查被提示公司与交易日序号的组合是否唯一。
+    duplicate_count = daily_panel.duplicated(
         ["StkcdRecall", "td"]
-    ]
-    .drop_duplicates()
-    .copy()
-)
+    ).sum()
 
-print("基准 cue 事件数：", len(cue_days))
-
-for i in range(1, 11):
-    # 如果 cue 发生在 td = T，
-    # 那么 td = T - i 的那一行应标记 cue_tp{i}=1
-    future_cue = cue_days.copy()
-    future_cue["td"] = future_cue["td"] - i
-
-    future_cue = (
-        future_cue
-        .drop_duplicates(["StkcdRecall", "td"])
-        .assign(**{f"cue_tp{i}": 1})
+    print(
+        "构造未来提示标记前的重复记录数：",
+        duplicate_count,
     )
 
-    TRD_Dalyr = TRD_Dalyr.merge(
-        future_cue,
-        on=["StkcdRecall", "td"],
-        how="left",
-        validate="1:1"
+    if duplicate_count != 0:
+        raise ValueError(
+            "被提示公司与交易日序号的组合不唯一，"
+            "不能构造未来提示标记。"
+        )
+
+    # 提取最终基准样本中保留的提示事件日。
+    cue_days = (
+        daily_panel.loc[
+            daily_panel["quarterLag1size90plus"].eq(1),
+            ["StkcdRecall", "td"],
+        ]
+        .drop_duplicates()
+        .copy()
     )
 
-    TRD_Dalyr[f"cue_tp{i}"] = (
-        TRD_Dalyr[f"cue_tp{i}"]
-        .fillna(0)
-        .astype("int8")
+    print("基准提示事件数：", len(cue_days))
+
+    for i in range(1, 11):
+        # 将事件日序号减去偏移量，匹配到事件发生前的日期。
+        future_cue = cue_days.copy()
+        future_cue["td"] = future_cue["td"] - i
+
+        future_cue = (
+            future_cue
+            .drop_duplicates(["StkcdRecall", "td"])
+            .assign(**{f"cue_tp{i}": 1})
+        )
+
+        daily_panel = daily_panel.merge(
+            future_cue,
+            on=["StkcdRecall", "td"],
+            how="left",
+            validate="1:1",
+        )
+
+        daily_panel[f"cue_tp{i}"] = (
+            daily_panel[f"cue_tp{i}"]
+            .fillna(0)
+            .astype("int8")
+        )
+
+    print("未来提示事件标记生成完成。")
+    print(
+        daily_panel[
+            [f"cue_tp{i}" for i in range(1, 11)]
+        ].sum()
     )
 
-print("future cue 虚拟变量生成完成。")
-print(TRD_Dalyr[[f"cue_tp{i}" for i in range(1, 11)]].sum())
+    return daily_panel
+
 
 #===============================================================================
 # 删除最终输出不需要的中间变量
 #===============================================================================
 
-# 确认原始收益率已经按原文命名，避免误删 raw_ret_* 里的核心收益变量
-expected_return_cols = (
-    ["return_tm3_Recall", "return_tm2_Recall", "return_tm1_Recall", "return_t_Recall"]
-    + [f"return_t_tp{i}_Recall" for i in range(1, 51)]
-)
+def clean_pattern_final_columns(daily_panel):
+    """确认核心原始收益率列齐全，再删除最终输出不需要的中间列。"""
 
-missing_return_cols = [
-    c for c in expected_return_cols
-    if c not in TRD_Dalyr.columns
-]
-
-if missing_return_cols:
-    raise ValueError(
-        "先把 raw_ret_* 重命名为 return_*_Recall，再删除 raw_ret_* 辅助列。"
-        f" 当前缺少：{missing_return_cols[:10]}"
+    expected_return_cols = (
+        [
+            "return_tm3_Recall",
+            "return_tm2_Recall",
+            "return_tm1_Recall",
+            "return_t_Recall",
+        ]
+        + [
+            f"return_t_tp{i}_Recall"
+            for i in range(1, 51)
+        ]
     )
 
-drop_cols_final = [
-    # 新闻控制变量直接使用上游构造结果，最终保留四个变化控制变量
-    "AES",
-    "AEV",
+    missing_return_cols = [
+        col
+        for col in expected_return_cols
+        if col not in daily_panel.columns
+    ]
 
-    # smallFirm 和 interference 高低组的中间分组变量
-    "marketCap_Minus3_Recall_medGr",
-    "interferenceGroupEWLag1S90p",
-    "interferenceGroupEWLag1S5090",
-    "interferenceGroupVWLag1S90p",
-    "interferenceGroupVWLag1S5090",
+    if missing_return_cols:
+        raise ValueError(
+            "请先完成核心原始收益率列的重命名，再清理辅助列。"
+            f" 当前缺少：{missing_return_cols[:10]}"
+        )
 
-    # A 股自身公告控制变量的来源字段，最终只保留 ownMajorDisclosure / ownPerformanceForecast
-    "ownPerformanceForecastBrief",
-    "ownOtherEventER",
+    drop_cols_final = [
+        # 新闻水平指标，最终保留四个新闻变化控制变量。
+        "AES",
+        "AEV",
 
-    # 日度面板和 DGTW 构造中的辅助字段
-    "ret",
-    "retn",
-    "Markettype",
-    "size",
-    "sizew",
-    "trade_days_1m",
-    "trade_days_1y",
-    "mktcap_tm3",
-    "float_mktcap_tm3",
-    "mktcap_tm3_valid",
-    "float_mktcap_tm3_valid",
-    "portfolioNumber",
-]
+        # 规模和干扰分组的中间列，最终保留对应标记。
+        "marketCap_Minus3_Recall_medGr",
+        "interferenceGroupEWLag1S90p",
+        "interferenceGroupEWLag1S5090",
+        "interferenceGroupVWLag1S90p",
+        "interferenceGroupVWLag1S5090",
 
-# raw_ret_* 中剩下的应只是不再需要的 nobs / valid_full 等辅助字段
-drop_cols_final += [
-    c for c in TRD_Dalyr.columns
-    if c.startswith("raw_ret_")
-]
+        # 日度面板和特征调整收益率构造中的辅助字段。
+        "ret",
+        "retn",
+        "Markettype",
+        "size",
+        "sizew",
+        "trade_days_1m",
+        "trade_days_1y",
+        "mktcap_tm3",
+        "float_mktcap_tm3",
+        "mktcap_tm3_valid",
+        "float_mktcap_tm3_valid",
+        "portfolioNumber",
+    ]
 
-drop_cols_final = list(dict.fromkeys(drop_cols_final))
-drop_cols_existing = [c for c in drop_cols_final if c in TRD_Dalyr.columns]
+    # 删除原始收益率旧前缀下剩余的辅助字段。
+    drop_cols_final += [
+        col
+        for col in daily_panel.columns
+        if col.startswith("raw_ret_")
+    ]
 
-print("最终输出前删除中间变量数量：", len(drop_cols_existing))
-print(drop_cols_existing)
+    drop_cols_final = list(dict.fromkeys(drop_cols_final))
 
-TRD_Dalyr = TRD_Dalyr.drop(columns=drop_cols_existing)
+    drop_cols_existing = [
+        col
+        for col in drop_cols_final
+        if col in daily_panel.columns
+    ]
+
+    print("最终输出前删除中间变量数量：", len(drop_cols_existing))
+    print(drop_cols_existing)
+
+    return daily_panel.drop(columns=drop_cols_existing)
+
 
 #===============================================================================
 # 变量中文标签
 #===============================================================================
+def build_pattern_variable_labels():
+    """构建变量名与中文说明的对应字典。"""
+    variable_labels = {
+        "StkcdRecall": "被提示公司股票代码",
+        "Trddt": "交易日期",
+        "td": "交易日序号",
+        "marketCap_Minus3_Recall": "被提示公司 t-3 日总市值",
 
-variable_labels = {
-    "StkcdRecall": "被提示公司股票代码",
-    "Trddt": "交易日期",
-    "td": "交易日序号",
-    "marketCap_Minus3_Recall": "被提示公司 t-3 日总市值",
+        "return_t_Recall": "被提示公司 t 日原始收益率",
+        "ownEA": "自身盈余公告日虚拟变量，等于1表示被提示公司在 t 日发布盈余公告",
 
-    "return_t_Recall": "被提示公司 t 日原始收益率",
-    "ownEA": "自身盈余公告日虚拟变量，等于1表示被提示公司在 t 日发布盈余公告",
+        "aesIncrease": "新闻情绪上升虚拟变量，使用上游真实交易日控制表口径",
+        "aesDecrease": "新闻情绪下降虚拟变量，使用上游真实交易日控制表口径",
+        "logIncreaseAEV": "新闻覆盖量上升幅度的对数值，log(1+上升量)",
+        "logDecreaseAEV": "新闻覆盖量下降幅度的对数值，log(1+下降量)",
+        "ownOtherEventER": "被提示公司专题研究事件控制变量，十类专题事件的并集",
+        "ownPerformanceForecastBrief": "被提示公司业绩预告或快报控制变量，二者的并集",
 
-    "aesIncrease": "新闻情绪上升虚拟变量，使用上游真实交易日控制表口径",
-    "aesDecrease": "新闻情绪下降虚拟变量，使用上游真实交易日控制表口径",
-    "logIncreaseAEV": "新闻覆盖量上升幅度的对数值，log(1+上升量)",
-    "logDecreaseAEV": "新闻覆盖量下降幅度的对数值，log(1+下降量)",
-    "ownMajorDisclosure": "被提示公司专题研究事件控制变量，十类专题事件的并集",
-    "ownPerformanceForecast": "被提示公司业绩预告或快报控制变量",
+        "nrCuesLag1S90p": (
+            "上一季度关系成立的大市值提示记录数量；"
+            "提示公司市值高于第90百分位，按配对记录求和"
+        ),
+        "nrCuesLag1S5090": (
+            "上一季度关系成立的中高市值提示记录数量；"
+            "市值高于第50且不高于第90百分位，按配对记录求和"
+        ),
+        "nrCuesLag1S1050": (
+            "上一季度关系成立的中低市值提示记录数量；"
+            "市值不低于第10且不高于第50百分位，按配对记录求和"
+        ),
+        "nrCuesLag1S10m": (
+            "上一季度关系成立的小市值提示记录数量；"
+            "市值低于第10百分位，按配对记录求和"
+        ),
 
-    "nrCuesLag1S90p": "lag1 大市值提示公司数量，提示公司市值高于90分位",
-    "nrCuesLag1S5090": "lag1 中高市值提示公司数量，提示公司市值位于50-90分位",
-    "nrCuesLag1S1050": "lag1 中低市值提示公司数量，提示公司市值位于10-50分位",
-    "nrCuesLag1S10m": "lag1 小市值提示公司数量，提示公司市值低于10分位",
+        "quarterLag1size90plus": "基准 cue 虚拟变量，等于1表示存在 lag1 大市值提示事件",
+        "quarterLag1size50_90": "中高市值 cue 虚拟变量，等于1表示存在50-90分位市值提示事件",
+        "quarterLag1size10_50": "中低市值 cue 虚拟变量，等于1表示存在10-50分位市值提示事件",
+        "quarterLag1size10minus": "小市值 cue 虚拟变量，等于1表示存在10分位以下市值提示事件",
 
-    "quarterLag1size90plus": "基准 cue 虚拟变量，等于1表示存在 lag1 大市值提示事件",
-    "quarterLag1size50_90": "中高市值 cue 虚拟变量，等于1表示存在50-90分位市值提示事件",
-    "quarterLag1size10_50": "中低市值 cue 虚拟变量，等于1表示存在10-50分位市值提示事件",
-    "quarterLag1size10minus": "小市值 cue 虚拟变量，等于1表示存在10分位以下市值提示事件",
+        "lowInterferenceEWLag1S90p": "低干扰大市值 cue 虚拟变量，等权 interference 分组为低组",
+        "highInterferenceEWLag1S90p": "高干扰大市值 cue 虚拟变量，等权 interference 分组为高组",
+        "lowInterferenceVWLag1S90p": "低干扰大市值 cue 虚拟变量，市值加权 interference 分组为低组",
+        "highInterferenceVWLag1S90p": "高干扰大市值 cue 虚拟变量，市值加权 interference 分组为高组",
 
-    "lowInterferenceEWLag1S90p": "低干扰大市值 cue 虚拟变量，等权 interference 分组为低组",
-    "highInterferenceEWLag1S90p": "高干扰大市值 cue 虚拟变量，等权 interference 分组为高组",
-    "lowInterferenceVWLag1S90p": "低干扰大市值 cue 虚拟变量，市值加权 interference 分组为低组",
-    "highInterferenceVWLag1S90p": "高干扰大市值 cue 虚拟变量，市值加权 interference 分组为高组",
+        "nrFirmsAnnLag1EWS90p": "lag1 大市值 cue 的共同公告公司数量，按 cue 等权平均",
+        "nrFirmsAnnLag1EWS5090": "lag1 中高市值 cue 的共同公告公司数量，按 cue 等权平均",
+        "nrFirmsAnnLag1VWS90p": "lag1 大市值 cue 的共同公告公司数量，按提示公司市值加权平均",
+        "nrFirmsAnnLag1VWS5090": "lag1 中高市值 cue 的共同公告公司数量，按提示公司市值加权平均",
 
-    "nrFirmsAnnLag1EWS90p": "lag1 大市值 cue 的共同公告公司数量，按 cue 等权平均",
-    "nrFirmsAnnLag1EWS5090": "lag1 中高市值 cue 的共同公告公司数量，按 cue 等权平均",
-    "nrFirmsAnnLag1VWS90p": "lag1 大市值 cue 的共同公告公司数量，按提示公司市值加权平均",
-    "nrFirmsAnnLag1VWS5090": "lag1 中高市值 cue 的共同公告公司数量，按提示公司市值加权平均",
+        "smallFirm": (
+            "被提示公司事件前第3个交易日总市值的年度二分组低组标记；"
+            "低组为1，其余情况（包括分组缺失）为0"
+        ),
+        "quarter": "交易日期所属日历季度",
+        "yearQuarter": "交易日期所属年度-季度",
+        "year": "交易日期所属年份",
+    }
 
-    "smallFirm": "小市值被提示公司虚拟变量，等于1表示被提示公司 t-3 市值低于当年中位数",
-    "quarter": "交易日期所属日历季度",
-    "yearQuarter": "交易日期所属年度-季度",
-    "year": "交易日期所属年份",
-}
+    for i in range(1, 4):
+        variable_labels[f"return_tm{i}_Recall"] = f"被提示公司 t-{i} 日原始收益率"
+        variable_labels[f"chAdjreturn_tm{i}_Recall"] = f"被提示公司 t-{i} 日特征调整收益率"
 
-for i in range(1, 4):
-    variable_labels[f"return_tm{i}_Recall"] = f"被提示公司 t-{i} 日原始收益率"
-    variable_labels[f"chAdjreturn_tm{i}_Recall"] = f"被提示公司 t-{i} 日特征调整收益率"
+    for i in range(1, 51):
+        variable_labels[f"return_t_tp{i}_Recall"] = f"被提示公司 [t, t+{i}] 窗口原始累计收益率"
+        variable_labels[f"chAdjreturn_t_tp{i}_Recall"] = (
+            f"被提示公司 [t, t+{i}] 窗口特征调整累计收益率"
+        )
 
-for i in range(1, 51):
-    variable_labels[f"return_t_tp{i}_Recall"] = f"被提示公司 [t, t+{i}] 窗口原始累计收益率"
-    variable_labels[f"chAdjreturn_t_tp{i}_Recall"] = (
-        f"被提示公司 [t, t+{i}] 窗口特征调整累计收益率"
+    for i in range(1, 11):
+        variable_labels[f"ownEA_tp{i}"] = f"未来自身公告控制变量，等于1表示被提示公司在 t+{i} 日发布盈余公告"
+        variable_labels[f"ownEA_tm{i}"] = f"过去自身公告控制变量，等于1表示被提示公司在 t-{i} 日发布盈余公告"
+        variable_labels[f"cue_tp{i}"] = (
+            f"被提示公司未来第{i}个市场交易日的基准提示标记；"
+            "1表示匹配到最终基准样本中保留的提示事件，0表示未匹配"
+        )
+
+    for sue_id in [1, 2, 3]:
+        variable_labels[f"sue{sue_id}CueLag1S90pVW"] = (
+            f"lag1 大市值提示公司的 SUE{sue_id} 盈余惊喜，按提示公司市值加权平均"
+        )
+        variable_labels[f"sue{sue_id}CueLag1S90pEW"] = (
+            f"lag1 大市值提示公司的 SUE{sue_id} 盈余惊喜，按 cue 等权平均"
+        )
+        variable_labels[f"sue{sue_id}CueLag1VWS90p_quintile"] = (
+            f"lag1 大市值提示公司市值加权 SUE{sue_id} 盈余惊喜五分位"
+        )
+        variable_labels[f"sue{sue_id}CueLag1EWS90p_quintile"] = (
+            f"lag1 大市值提示公司等权 SUE{sue_id} 盈余惊喜五分位"
+        )
+    return variable_labels
+
+def save_pattern_final_sample(daily_panel, output_path):
+    """按现有格式保存最终回归面板。"""
+
+    print("正在输出最终文件......")
+
+    daily_panel.to_csv(
+        output_path,
+        index=False,
+        encoding="utf-8-sig",
+        date_format="%Y-%m-%d",
     )
 
-for i in range(1, 11):
-    variable_labels[f"ownEA_tp{i}"] = f"未来自身公告控制变量，等于1表示被提示公司在 t+{i} 日发布盈余公告"
-    variable_labels[f"ownEA_tm{i}"] = f"过去自身公告控制变量，等于1表示被提示公司在 t-{i} 日发布盈余公告"
-    variable_labels[f"cue_tp{i}"] = f"未来 cue 控制变量，等于1表示被提示公司在 t+{i} 日发生基准 cue"
+    print("最终文件输出成功!")
 
-for sue_id in [1, 2, 3]:
-    variable_labels[f"sue{sue_id}CueLag1S90pVW"] = (
-        f"lag1 大市值提示公司的 SUE{sue_id} 盈余惊喜，按提示公司市值加权平均"
-    )
-    variable_labels[f"sue{sue_id}CueLag1S90pEW"] = (
-        f"lag1 大市值提示公司的 SUE{sue_id} 盈余惊喜，按 cue 等权平均"
-    )
-    variable_labels[f"sue{sue_id}CueLag1VWS90p_quintile"] = (
-        f"lag1 大市值提示公司市值加权 SUE{sue_id} 盈余惊喜五分位"
-    )
-    variable_labels[f"sue{sue_id}CueLag1EWS90p_quintile"] = (
-        f"lag1 大市值提示公司等权 SUE{sue_id} 盈余惊喜五分位"
+
+
+def main(
+    root="/Users/qiyuewu/Desktop/mmm复现数据包",
+    *,
+    sue_denominator_mode="nonmissing_sue",
+    drop_analyst_overlap=True,
+    analyst_id_mode="split",
+    analyst_lookback_days=365,
+    marketcap_breakpoint_mode="prev_month",
+    event_date_mode="next_if_nontrading",
+    top_mover_mode="any",
+):
+    """统一组织模式公司样本的构建流程。"""
+
+    # 根据项目根目录构造输入、输出路径。
+    root = Path(root)
+    paths = build_pattern_paths(root)
+
+    # 集中构造并校验运行参数。
+    config = build_pattern_config(
+        sue_denominator_mode=sue_denominator_mode,
+        drop_analyst_overlap=drop_analyst_overlap,
+        analyst_id_mode=analyst_id_mode,
+        analyst_lookback_days=analyst_lookback_days,
+        marketcap_breakpoint_mode=marketcap_breakpoint_mode,
+        event_date_mode=event_date_mode,
+        top_mover_mode=top_mover_mode,
     )
 
-print("正在输出最终文件......")
+    # 分析师共同覆盖文件所在目录。
+    analyst_overlap_root = (
+        root / "中间结果/03_记忆矩阵/分析师共同覆盖_参考文献后"
+    )
 
-TRD_Dalyr.to_csv(
-    output_path,
-    index=False,
-    encoding="utf-8-sig",
-    date_format="%Y-%m-%d"
-)
+        # 第一阶段：读取记忆矩阵，并合并提示公司市值。
+    mm = load_pattern_matrix_with_marketcap(
+        matrix_path=paths["MemoryMatrixPattern_path"],
+        daily_panel_path=paths["TRD_Dalyr_DGTW_path"],
+    )
 
-print("最终文件输出成功!")
+    # 合并月度市值断点。
+    mm = merge_monthly_marketcap_breakpoints(
+        mm=mm,
+        breakpoint_path=paths["marketcap_group_path"],
+        breakpoint_mode=config["MARKETCAP_BREAKPOINT_MODE"],
+    )
+
+    # 合并提示公司当前财报的盈余惊喜。
+    mm = merge_current_cue_sue(
+        mm=mm,
+        sue_path=paths["sue_path"],
+        report_path=paths["IAR_Rept_path"],
+    )
+
+    # 构造筛选键表，排除已识别的同行业公司对。
+    mm_key = filter_same_industry_pairs(
+        mm=mm,
+        industry_path=paths["industry_path"],
+    )
+
+    # 排除已识别的一级供应链公司对。
+    mm_key = filter_supply_chain_pairs(
+        mm_key=mm_key,
+        supply_chain_path=paths["SC_NetWorkRelationsIndex_path"],
+    )
+
+    # 根据开关处理共同分析师覆盖。
+    mm_key = filter_analyst_overlap_pairs(
+        mm_key=mm_key,
+        overlap_root=analyst_overlap_root,
+        id_mode=config["ANALYST_ID_MODE"],
+        lookback_days=config["ANALYST_LOOKBACK_DAYS"],
+        drop_overlap=config["DROP_ANALYST_OVERLAP"],
+    )
+
+    # 将合格公司对名单应用到完整记忆矩阵。
+    mm = apply_pair_filters(
+        mm=mm,
+        mm_key=mm_key,
+    )
+
+        # 第二阶段：构造提示变量，并聚合到被提示公司事件日。
+    mm = add_size_groups_and_basic_cues(
+        mm=mm,
+    )
+
+    mm = add_strong_memory_cues(
+        mm=mm,
+        top_mover_mode=config["TOP_MOVER_MODE"],
+    )
+
+    mm = add_sue_cue_inputs(
+        mm=mm,
+    )
+
+    mm = add_marketcap_and_interference_inputs(
+        mm=mm,
+    )
+
+    # 聚合前保留基准提示配对，供后续统计使用。
+    mm, cue_pairs = prepare_pattern_cue_pairs(
+        mm=mm,
+    )
+
+    # 聚合提示数量、机制标记、盈余惊喜和干扰指标。
+    collapsed = collapse_pattern_cues(
+        mm=mm,
+        denominator_mode=config["SUE_DENOMINATOR_MODE"],
+    )
+
+    # 保存并保留精简提示事件表，供后续日度面板合并。
+    cue_events_for_panel = save_pattern_cue_events(
+        collapsed=collapsed,
+        output_path=paths["cue_events_out_path"],
+    )
+
+    # 释放已完成用途的大中间表。
+    del mm, mm_key, collapsed
+    gc.collect()
+
+        # 第三阶段：读取日度主面板，合并事件、新闻和收益率。
+    daily_panel = load_pattern_daily_panel(
+        daily_panel_path=paths["TRD_Dalyr_DGTW_path"],
+    )
+
+    # 映射被提示公司自身财报公告日。
+    daily_panel = add_own_earnings_announcement_flag(
+        daily_panel=daily_panel,
+        report_path=paths["IAR_Rept_path"],
+        event_date_mode=config["EVENT_DATE_MODE"],
+    )
+
+    # 构造自身财报公告前后十个交易日的控制变量。
+    daily_panel = add_own_ea_windows(
+        daily_panel=daily_panel,
+        window=10,
+    )
+
+    # 合并业绩预告或快报、十类专题事件控制变量。
+    daily_panel = merge_own_event_controls(
+        daily_panel=daily_panel,
+        performance_forecast_path=paths[
+            "performance_forecast_controls_path"
+        ],
+        other_event_path=paths["other_event_controls_path"],
+    )
+
+    # 合并新闻变化控制变量。
+    daily_panel = merge_news_controls(
+        daily_panel=daily_panel,
+        news_path=paths["AES_AEV_controls_path"],
+    )
+
+    # 直接合并前一阶段保留的提示事件汇总表。
+    daily_panel = merge_pattern_cue_events(
+        daily_panel=daily_panel,
+        cue_events_path=paths["cue_events_out_path"],
+        cue_events=cue_events_for_panel,
+    )
+
+    # 按现有口径填补提示标记和提示数量。
+    daily_panel = fill_pattern_cue_indicators(
+        daily_panel=daily_panel,
+    )
+
+    # 合并被提示公司的特征调整收益率。
+    daily_panel = merge_adjusted_returns(
+        daily_panel=daily_panel,
+        adjusted_return_path=paths["adjusted_return_path"],
+    )
+
+        # 第四阶段：构造分组，准备并筛选基准样本。
+
+    # 构造干扰指标的年度高低组。
+    daily_panel = add_interference_groups(
+        daily_panel=daily_panel,
+    )
+
+    # 构造提示公司盈余惊喜均值的全样本五分位组。
+    daily_panel = add_sue_cue_quantiles(
+        daily_panel=daily_panel,
+    )
+
+    # 构造被提示公司的年度市值分组和小公司标记。
+    daily_panel = add_recalled_firm_size_group(
+        daily_panel=daily_panel,
+    )
+
+    print("开始缩尾......")
+
+    # 在筛选基准样本前，计算全样本缩尾阈值。
+    winsor_limits, winsor_source_cols = compute_pattern_winsor_limits(
+        daily_panel=daily_panel,
+        p=0.01,
+    )
+
+    # 生成两个缩尾因变量、季度标识，并整理表顺序。
+    daily_panel = prepare_pattern_baseline_inputs(
+        daily_panel=daily_panel,
+        winsor_limits=winsor_limits,
+    )
+
+    # 先筛短窗口，再在剩余样本中筛长窗口。
+    daily_panel = filter_pattern_baseline_sample(
+        daily_panel=daily_panel,
+    )
+
+        # 第五阶段：统计提示范围，并完成最终样本整理。
+
+    # 使用聚合前保留的配对表，统计最终样本中的提示范围。
+    nr_firms_cued, nr_firms_cued_summary = summarize_pattern_cue_reach(
+        daily_panel=daily_panel,
+        cue_pairs=cue_pairs,
+    )
+
+    # 复用筛选前的阈值，补生成其余缩尾列。
+    daily_panel = add_remaining_pattern_winsor_cols(
+        daily_panel=daily_panel,
+        winsor_source_cols=winsor_source_cols,
+        winsor_limits=winsor_limits,
+    )
+
+    # 根据最终基准样本构造未来提示标记。
+    daily_panel = add_future_pattern_cue_flags(
+        daily_panel=daily_panel,
+    )
+
+    # 删除最终输出不需要的中间列。
+    daily_panel = clean_pattern_final_columns(
+        daily_panel=daily_panel,
+    )
+
+    # 构造中文说明字典。
+    variable_labels = build_pattern_variable_labels()
+
+    # 保存最终回归面板。
+    save_pattern_final_sample(
+        daily_panel=daily_panel,
+        output_path=paths["output_path"],
+    )
+
+    # 返回结果，供后续查阅和分析。
+    return {
+        "daily_panel": daily_panel,
+        "nr_firms_cued": nr_firms_cued,
+        "nr_firms_cued_summary": nr_firms_cued_summary,
+        "variable_labels": variable_labels,
+    }
+
+
+if __name__ == "__main__":
+    results = main()

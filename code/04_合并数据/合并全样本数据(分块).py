@@ -36,59 +36,194 @@ def normalize_stock_code(x: object) -> str:
 
 ROOT = Path('/Users/qiyuewu/Desktop/mmm复现数据包')
 
-MemoryMatrixFull_path = ROOT / '中间结果/03_记忆矩阵/MemoryMatrixFull(封装优化版).csv'
-TRD_Cale_td_path = ROOT / '中间结果/01_清洗后样本/市场交易日历_td.csv'
-TRD_Dalyr_DGTW_path = ROOT / '中间结果/01_清洗后样本/DGTW构建用个股日度面板.csv'
-marketcap_group_path = ROOT / '中间结果/02_变量构造结果/8月度市值分组/月度市值分组.csv'
-industry_path = ROOT / '中间结果/02_变量构造结果/同行业识别/个股行业代码完整面板_RESSET补缺.csv'
-SC_NetWorkRelationsIndex_path = ROOT/'input/CSMAR/供应链网络关系指标表2001-12-31至2025-12-31/SC_NetworkRelationsIndex.csv'
-IAR_Rept_path = ROOT/'input/CSMAR/年、中、季报基本情况文件1990-12-31至2026-06-30/IAR_Rept.csv'
-AES_AEV_controls_path = ROOT/'中间结果/02_变量构造结果/3报刊新闻_AES_AEV/报刊新闻_AES_AEV_真实交易日控制变量.csv'
-sample_intermediate_out_path = ROOT / "中间结果/04_合并数据/Sample_intermediate_full.csv"
-adjusted_return_path = ROOT / "中间结果/02_变量构造结果/1DGTW特征调整收益率/DGTW特征调整收益率.csv"
-output_path = ROOT/'中间结果/04_合并数据/Full样本_最终回归面板.csv'
-performance_forecast_controls_path = (
-    ROOT / "中间结果/02_变量构造结果/5公司公告事件/业绩预告快报控制变量_公告日期口径.csv"
-)
-other_event_controls_path = (
-    ROOT / "中间结果/02_变量构造结果/5公司公告事件/专题研究事件控制变量_公告日期口径.csv"
-)
+def build_full_paths(root):
+    """根据项目根目录，构造全样本脚本的输入、输出路径。"""
+    root = Path(root)
 
-cue_events_out_path = ROOT / '中间结果/04_合并数据/Full_cue_events_after_collapse.csv'
+    relative_paths = {
+        "MemoryMatrixFull_path": (
+            "中间结果/03_记忆矩阵/"
+            "MemoryMatrixFull(封装优化版).csv"
+        ),
+        "TRD_Cale_td_path": (
+            "中间结果/01_清洗后样本/市场交易日历_td.csv"
+        ),
+        "TRD_Dalyr_DGTW_path": (
+            "中间结果/01_清洗后样本/"
+            "DGTW构建用个股日度面板.csv"
+        ),
+        "marketcap_group_path": (
+            "中间结果/02_变量构造结果/"
+            "8月度市值分组/月度市值分组.csv"
+        ),
+        "industry_path": (
+            "中间结果/02_变量构造结果/同行业识别/"
+            "个股行业代码完整面板_RESSET补缺.csv"
+        ),
+        "SC_NetWorkRelationsIndex_path": (
+            "input/CSMAR/"
+            "供应链网络关系指标表2001-12-31至2025-12-31/"
+            "SC_NetworkRelationsIndex.csv"
+        ),
+        "IAR_Rept_path": (
+            "input/CSMAR/"
+            "年、中、季报基本情况文件1990-12-31至2026-06-30/"
+            "IAR_Rept.csv"
+        ),
+        "AES_AEV_controls_path": (
+            "中间结果/02_变量构造结果/3报刊新闻_AES_AEV/"
+            "报刊新闻_AES_AEV_真实交易日控制变量.csv"
+        ),
+        "adjusted_return_path": (
+            "中间结果/02_变量构造结果/1DGTW特征调整收益率/"
+            "DGTW特征调整收益率.csv"
+        ),
+        "performance_forecast_controls_path": (
+            "中间结果/02_变量构造结果/5公司公告事件/"
+            "业绩预告快报控制变量_公告日期口径.csv"
+        ),
+        "other_event_controls_path": (
+            "中间结果/02_变量构造结果/5公司公告事件/"
+            "专题研究事件控制变量_公告日期口径.csv"
+        ),
+        "sample_intermediate_out_path": (
+            "中间结果/04_合并数据/Sample_intermediate_full.csv"
+        ),
+        "cue_events_out_path": (
+            "中间结果/04_合并数据/Full_cue_events_after_collapse.csv"
+        ),
+        "output_path": (
+            "中间结果/04_合并数据/Full样本_最终回归面板.csv"
+        ),
+    }
+
+    return {
+        name: root / relative_path
+        for name, relative_path in relative_paths.items()
+    }
+
+# 统一构造输入、输出路径。
+paths = build_full_paths(ROOT)
+
+# 暂时保留原变量名，供后续尚未封装的代码使用。
+MemoryMatrixFull_path = paths["MemoryMatrixFull_path"]
+TRD_Cale_td_path = paths["TRD_Cale_td_path"]
+TRD_Dalyr_DGTW_path = paths["TRD_Dalyr_DGTW_path"]
+marketcap_group_path = paths["marketcap_group_path"]
+industry_path = paths["industry_path"]
+SC_NetWorkRelationsIndex_path = paths["SC_NetWorkRelationsIndex_path"]
+IAR_Rept_path = paths["IAR_Rept_path"]
+AES_AEV_controls_path = paths["AES_AEV_controls_path"]
+adjusted_return_path = paths["adjusted_return_path"]
+
+performance_forecast_controls_path = (
+    paths["performance_forecast_controls_path"]
+)
+other_event_controls_path = paths["other_event_controls_path"]
+
+sample_intermediate_out_path = paths["sample_intermediate_out_path"]
+cue_events_out_path = paths["cue_events_out_path"]
+output_path = paths["output_path"]
+
+# 保留原有的提示事件输出目录创建操作。
 cue_events_out_path.parent.mkdir(parents=True, exist_ok=True)
 
 # =============================================================================
 # 参数设置
 # =============================================================================
 
-# 1. 分析师共同覆盖过滤参数
-DROP_ANALYST_OVERLAP = True
-# True: 删除有共同分析师覆盖的公司对
-# False: 只合并标记，不删除
+def build_full_config(
+    *,
+    drop_analyst_overlap,
+    analyst_id_mode,
+    analyst_lookback_days,
+    marketcap_breakpoint_mode,
+    event_date_mode,
+    mm_chunksize=1_000_000,
+    reuse_existing_cue_events=False,
+):
+    """集中构造并校验全样本脚本的运行参数。"""
 
-ANALYST_OVERLAP_ROOT = ROOT / '中间结果/03_记忆矩阵/分析师共同覆盖_参考文献后'
+    if not isinstance(drop_analyst_overlap, bool):
+        raise TypeError("共同分析师覆盖排除开关必须为布尔值。")
 
-ANALYST_ID_MODE = 'split'
-# 'split': 拆开 AnanmID，按个人分析师识别，推荐主口径
-# 'team': 不拆开 AnanmID，按原始 AnanmID 字符串识别
+    if not isinstance(reuse_existing_cue_events, bool):
+        raise TypeError("提示事件表复用开关必须为布尔值。")
 
-ANALYST_LOOKBACK_DAYS = 365
-# 可选：365 或 45
+    if analyst_id_mode not in {"split", "team"}:
+        raise ValueError(
+            "分析师身份口径只能是 "
+            "'split'（个人）或 'team'（完整团队）。"
+        )
 
-# 2.市值排名数据参数
-MARKETCAP_BREAKPOINT_MODE = "prev_month"
+    if marketcap_breakpoint_mode not in {
+        "prev_month",
+        "same_month",
+    }:
+        raise ValueError(
+            "市值断点月份只能是 "
+            "'prev_month'（上月）或 'same_month'（当月）。"
+        )
 
-# 事件反应日口径
-EVENT_DATE_MODE = "next_if_nontrading"
-# "next_if_nontrading": 主口径，只调整非交易日
-# "strict_next_trading": 稳健性口径，交易日也顺延
+    if event_date_mode not in {
+        "next_if_nontrading",
+        "strict_next_trading",
+    }:
+        raise ValueError(
+            "事件日口径只能是 "
+            "'next_if_nontrading'（仅非交易日顺延）或 "
+            "'strict_next_trading'（严格使用下一交易日）。"
+        )
 
-VALID_EVENT_DATE_MODES = {"next_if_nontrading", "strict_next_trading"}
+    positive_integer_params = {
+        "分析师回看窗口天数": analyst_lookback_days,
+        "记忆矩阵分块行数": mm_chunksize,
+    }
 
-if EVENT_DATE_MODE not in VALID_EVENT_DATE_MODES:
-    raise ValueError(
-        f"EVENT_DATE_MODE 只能是 {VALID_EVENT_DATE_MODES}，当前是 {EVENT_DATE_MODE}"
-    )
+    for name, value in positive_integer_params.items():
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value <= 0
+        ):
+            raise ValueError(f"{name}必须为正整数。")
+
+    return {
+        "DROP_ANALYST_OVERLAP": drop_analyst_overlap,
+        "ANALYST_ID_MODE": analyst_id_mode,
+        "ANALYST_LOOKBACK_DAYS": analyst_lookback_days,
+        "MARKETCAP_BREAKPOINT_MODE": marketcap_breakpoint_mode,
+        "EVENT_DATE_MODE": event_date_mode,
+        "MM_CHUNKSIZE": mm_chunksize,
+        "REUSE_EXISTING_CUE_EVENTS": reuse_existing_cue_events,
+    }
+
+
+# 集中设置并校验运行参数。
+config = build_full_config(
+    drop_analyst_overlap=True,               # 排除共同分析师覆盖
+    analyst_id_mode="split",                 # 个人分析师口径
+    analyst_lookback_days=365,               # 回看365个自然日
+    marketcap_breakpoint_mode="prev_month",  # 使用上月市值断点
+    event_date_mode="next_if_nontrading",    # 仅非交易日顺延
+    mm_chunksize=1_000_000,                  # 每块读取100万行
+    reuse_existing_cue_events=False,         # 默认重新构造提示事件
+)
+
+# 暂时保留原变量名，供后续尚未封装的代码使用。
+DROP_ANALYST_OVERLAP = config["DROP_ANALYST_OVERLAP"]
+ANALYST_ID_MODE = config["ANALYST_ID_MODE"]
+ANALYST_LOOKBACK_DAYS = config["ANALYST_LOOKBACK_DAYS"]
+MARKETCAP_BREAKPOINT_MODE = config["MARKETCAP_BREAKPOINT_MODE"]
+EVENT_DATE_MODE = config["EVENT_DATE_MODE"]
+MM_CHUNKSIZE = config["MM_CHUNKSIZE"]
+REUSE_EXISTING_CUE_EVENTS = config["REUSE_EXISTING_CUE_EVENTS"]
+
+# 分析师共同覆盖文件所在目录。
+ANALYST_OVERLAP_ROOT = (
+    ROOT / "中间结果/03_记忆矩阵/分析师共同覆盖_参考文献后"
+)
+
 #===============================================================================
 # 读取记忆矩阵：分块筛选并 collapse 到 被提示公司 × 日期
 #===============================================================================
@@ -105,140 +240,232 @@ def combine_cue_parts(parts):
     )
 
 
+def load_full_calendar(calendar_path):
+    """读取市场交易日历，按日期排序并整理交易日序号。"""
+
+    calendar = pd.read_csv(
+        calendar_path,
+        encoding="utf-8",
+        usecols=["Trddt", "td"],
+        parse_dates=["Trddt"],
+    ).sort_values("Trddt")
+
+    calendar["td"] = pd.to_numeric(
+        calendar["td"],
+        errors="coerce",
+    )
+
+    return calendar
+
+
+def load_full_marketcap_index(daily_panel_path):
+    """读取日度总市值，建立后续查询事件前三交易日市值的索引。"""
+
+    mktcap = pd.read_csv(
+        daily_panel_path,
+        encoding="utf-8",
+        usecols=["Stkcd", "td", "size"],
+        dtype={"Stkcd": "string"},
+    )
+
+    mktcap["Stkcd"] = (
+        mktcap["Stkcd"].apply(normalize_stock_code)
+    )
+    mktcap["td"] = pd.to_numeric(
+        mktcap["td"],
+        errors="coerce",
+    )
+
+    mktcap = mktcap.rename(
+        columns={
+            "td": "td_tm3",
+            "size": "mktcap_tm3",
+        }
+    )
+
+    mktcap_index = mktcap.set_index(
+        ["Stkcd", "td_tm3"]
+    )["mktcap_tm3"]
+
+    if not mktcap_index.index.is_unique:
+        raise ValueError("日度市值表的股票代码—交易日键不唯一。")
+
+    del mktcap
+    gc.collect()
+
+    return mktcap_index
+
+def load_full_marketcap_breakpoints(breakpoint_path):
+    """读取月度市值断点，整理用于匹配的月份字段。"""
+
+    marketcap_group = pd.read_csv(
+        breakpoint_path,
+        encoding="utf-8",
+    )
+
+    marketcap_group["Trdmnt"] = pd.to_datetime(
+        marketcap_group["Trdmnt"]
+    )
+
+    return marketcap_group.rename(
+        columns={"Trdmnt": "Trdmnt_breakpoint"}
+    )
+
+
+def load_full_industry_index(industry_path):
+    """读取日度行业数据，建立公司—交易日行业查询索引。"""
+
+    daily_industry = pd.read_csv(
+        industry_path,
+        encoding="utf-8",
+        usecols=["Stkcd", "td", "IndustryCode"],
+        dtype={
+            "Stkcd": "string",
+            "IndustryCode": "string",
+        },
+    )
+
+    daily_industry["Stkcd"] = (
+        daily_industry["Stkcd"].apply(normalize_stock_code)
+    )
+    daily_industry["td"] = pd.to_numeric(
+        daily_industry["td"],
+        errors="coerce",
+    )
+
+    daily_industry = (
+        daily_industry
+        .dropna(subset=["Stkcd", "td", "IndustryCode"])
+        .drop_duplicates(["Stkcd", "td"])
+    )
+
+    industry_index = daily_industry.set_index(
+        ["Stkcd", "td"]
+    )["IndustryCode"]
+
+    del daily_industry
+    gc.collect()
+
+    return industry_index
+
+
+def load_full_supply_chain_index(supply_chain_path):
+    """读取一级供应链关系，构造用于排除公司对的年度双向索引。"""
+
+    supply_chain_raw = pd.read_csv(
+        supply_chain_path,
+        encoding="utf-8",
+        usecols=[
+            "Symbol",
+            "EndDate",
+            "StateTypeCode",
+            "PSCBusinessRelation",
+            "PSCSymbol",
+        ],
+        dtype={
+            "Symbol": "string",
+            "StateTypeCode": "string",
+            "PSCBusinessRelation": "string",
+            "PSCSymbol": "string",
+        },
+        parse_dates=["EndDate"],
+    )
+
+    supply_chain_raw["yearCue"] = (
+        supply_chain_raw["EndDate"].dt.year
+    )
+    supply_chain_raw["Symbol"] = (
+        supply_chain_raw["Symbol"].apply(normalize_stock_code)
+    )
+
+    # 关联方代码先按原始格式筛选，再进行标准化。
+    is_a_share_pair = (
+        supply_chain_raw["StateTypeCode"].eq("1")
+        & supply_chain_raw["PSCSymbol"].str.fullmatch(
+            r"[0368][0-9]{5}",
+            na=False,
+        )
+        & supply_chain_raw["PSCBusinessRelation"].isin(["1", "2"])
+    )
+
+    supply_chain = supply_chain_raw.loc[is_a_share_pair].copy()
+    supply_chain["PSCSymbol"] = (
+        supply_chain["PSCSymbol"].apply(normalize_stock_code)
+    )
+
+    # 沿用原脚本的上下游方向转换规则。
+    supply_chain["upstream_stkcd"] = np.where(
+        supply_chain["PSCBusinessRelation"].eq("1"),
+        supply_chain["Symbol"],
+        supply_chain["PSCSymbol"],
+    )
+
+    supply_chain["downstream_stkcd"] = np.where(
+        supply_chain["PSCBusinessRelation"].eq("1"),
+        supply_chain["PSCSymbol"],
+        supply_chain["Symbol"],
+    )
+
+    # 删除自身配对，并对年度有向关系去重。
+    supply_chain = supply_chain.loc[
+        supply_chain["upstream_stkcd"]
+        != supply_chain["downstream_stkcd"],
+        ["yearCue", "upstream_stkcd", "downstream_stkcd"],
+    ].drop_duplicates()
+
+    # 任一方向存在关系，都纳入公司对排除索引。
+    vertical_pairs_forward = supply_chain.rename(
+        columns={
+            "upstream_stkcd": "Stkcd",
+            "downstream_stkcd": "StkcdRecall",
+        }
+    )[["yearCue", "Stkcd", "StkcdRecall"]]
+
+    vertical_pairs_reverse = supply_chain.rename(
+        columns={
+            "downstream_stkcd": "Stkcd",
+            "upstream_stkcd": "StkcdRecall",
+        }
+    )[["yearCue", "Stkcd", "StkcdRecall"]]
+
+    vertical_pairs = (
+        pd.concat(
+            [vertical_pairs_forward, vertical_pairs_reverse],
+            ignore_index=True,
+        )
+        .drop_duplicates()
+        .assign(vertical_related=1)
+    )
+
+    return vertical_pairs.set_index(
+        ["yearCue", "Stkcd", "StkcdRecall"]
+    ).index
+
+
 print("正在读取辅助表......")
 
-calendar = pd.read_csv(
-    TRD_Cale_td_path,
-    encoding="utf-8",
-    usecols=["Trddt", "td"],
-    parse_dates=["Trddt"],
-).sort_values("Trddt")
-
-calendar["td"] = pd.to_numeric(calendar["td"], errors="coerce")
-
-mktcap = pd.read_csv(
-    TRD_Dalyr_DGTW_path,
-    encoding="utf-8",
-    usecols=["Stkcd", "td", "size"],
-    dtype={"Stkcd": "string"},
+calendar = load_full_calendar(
+    calendar_path=TRD_Cale_td_path,
 )
 
-mktcap["Stkcd"] = mktcap["Stkcd"].apply(normalize_stock_code)
-mktcap["td"] = pd.to_numeric(mktcap["td"], errors="coerce")
-
-mktcap = mktcap.rename(
-    columns={
-        "td": "td_tm3",
-        "size": "mktcap_tm3",
-    }
-)
-mktcap_index = mktcap.set_index(["Stkcd", "td_tm3"])["mktcap_tm3"]
-if not mktcap_index.index.is_unique:
-    raise ValueError("日度市值表的 Stkcd-td 键不唯一。")
-del mktcap
-gc.collect()
-
-marketcap_group = pd.read_csv(
-    marketcap_group_path,
-    encoding="utf-8",
+mktcap_index = load_full_marketcap_index(
+    daily_panel_path=TRD_Dalyr_DGTW_path,
 )
 
-marketcap_group["Trdmnt"] = pd.to_datetime(marketcap_group["Trdmnt"])
-marketcap_group_merge = marketcap_group.rename(
-    columns={"Trdmnt": "Trdmnt_breakpoint"}
+
+
+marketcap_group_merge = load_full_marketcap_breakpoints(
+    breakpoint_path=marketcap_group_path,
 )
 
-daily_industry = pd.read_csv(
-    industry_path,
-    encoding="utf-8",
-    usecols=["Stkcd", "td", "IndustryCode"],
-    dtype={"Stkcd": "string", "IndustryCode": "string"},
+industry_index = load_full_industry_index(
+    industry_path=industry_path,
 )
 
-daily_industry["Stkcd"] = daily_industry["Stkcd"].apply(normalize_stock_code)
-daily_industry["td"] = pd.to_numeric(daily_industry["td"], errors="coerce")
 
-daily_industry = (
-    daily_industry
-    .dropna(subset=["Stkcd", "td", "IndustryCode"])
-    .drop_duplicates(["Stkcd", "td"])
+vertical_pair_index = load_full_supply_chain_index(
+    supply_chain_path=SC_NetWorkRelationsIndex_path,
 )
-
-industry_index = daily_industry.set_index(["Stkcd", "td"])["IndustryCode"]
-del daily_industry
-gc.collect()
-
-SC_NetWorkRelationsIndex = pd.read_csv(
-    SC_NetWorkRelationsIndex_path,
-    encoding="utf-8",
-    usecols=[
-        "Symbol",
-        "EndDate",
-        "StateTypeCode",
-        "PSCBusinessRelation",
-        "PSCSymbol",
-    ],
-    dtype={
-        "Symbol": "string",
-        "StateTypeCode": "string",
-        "PSCBusinessRelation": "string",
-        "PSCSymbol": "string",
-    },
-    parse_dates=["EndDate"],
-)
-
-SC_NetWorkRelationsIndex["yearCue"] = SC_NetWorkRelationsIndex["EndDate"].dt.year
-SC_NetWorkRelationsIndex["Symbol"] = SC_NetWorkRelationsIndex["Symbol"].apply(normalize_stock_code)
-
-is_a_share_pair = (
-    SC_NetWorkRelationsIndex["StateTypeCode"].eq("1")
-    & SC_NetWorkRelationsIndex["PSCSymbol"].str.fullmatch(r"[0368][0-9]{5}", na=False)
-    & SC_NetWorkRelationsIndex["PSCBusinessRelation"].isin(["1", "2"])
-)
-
-supply_chain = SC_NetWorkRelationsIndex.loc[is_a_share_pair].copy()
-supply_chain["PSCSymbol"] = supply_chain["PSCSymbol"].apply(normalize_stock_code)
-
-supply_chain["upstream_stkcd"] = np.where(
-    supply_chain["PSCBusinessRelation"].eq("1"),
-    supply_chain["Symbol"],
-    supply_chain["PSCSymbol"],
-)
-
-supply_chain["downstream_stkcd"] = np.where(
-    supply_chain["PSCBusinessRelation"].eq("1"),
-    supply_chain["PSCSymbol"],
-    supply_chain["Symbol"],
-)
-
-supply_chain = supply_chain.loc[
-    supply_chain["upstream_stkcd"] != supply_chain["downstream_stkcd"],
-    ["yearCue", "upstream_stkcd", "downstream_stkcd"],
-].drop_duplicates()
-
-vertical_pairs_forward = supply_chain.rename(
-    columns={
-        "upstream_stkcd": "Stkcd",
-        "downstream_stkcd": "StkcdRecall",
-    }
-)[["yearCue", "Stkcd", "StkcdRecall"]]
-
-vertical_pairs_reverse = supply_chain.rename(
-    columns={
-        "downstream_stkcd": "Stkcd",
-        "upstream_stkcd": "StkcdRecall",
-    }
-)[["yearCue", "Stkcd", "StkcdRecall"]]
-
-vertical_pairs = (
-    pd.concat([vertical_pairs_forward, vertical_pairs_reverse], ignore_index=True)
-    .drop_duplicates()
-    .assign(vertical_related=1)
-)
-vertical_pair_index = vertical_pairs.set_index(
-    ["yearCue", "Stkcd", "StkcdRecall"]
-).index
-del vertical_pairs
 
 id_mode_folder = {
     "split": "拆开AnanmID",
@@ -434,9 +661,6 @@ def process_mm_chunk(mm):
 
     return part
 
-
-REUSE_EXISTING_CUE_EVENTS = False
-# 复用缓存须手动开启；上游记忆矩阵更新后，应从当前输入重算。
 collapsed_parts = []
 collapsed = pd.DataFrame()
 
@@ -467,7 +691,7 @@ else:
             "Stkcd": "string",
             "StkcdRecall": "string",
         },
-        chunksize=1_000_000,
+        chunksize=MM_CHUNKSIZE,
     )
 
     for chunk_no, chunk in enumerate(reader, start=1):
@@ -485,7 +709,7 @@ else:
         if len(collapsed_parts) >= 25:
             collapsed_parts = [combine_cue_parts(collapsed_parts)]
         if chunk_no % 10 == 0:
-            print(f"已处理记忆矩阵 {chunk_no:,} 百万行")
+            print(f"已处理记忆矩阵 {chunk_no:,} 个分块")
         del chunk, part
         gc.collect()
 
@@ -513,13 +737,8 @@ else:
 
 del calendar
 del mktcap_index
-del marketcap_group
 del marketcap_group_merge
 del industry_index
-del SC_NetWorkRelationsIndex
-del supply_chain
-del vertical_pairs_forward
-del vertical_pairs_reverse
 del vertical_pair_index
 del analyst_exclusion_index
 del collapsed_parts
