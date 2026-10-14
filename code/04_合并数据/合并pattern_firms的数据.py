@@ -2281,38 +2281,54 @@ def merge_adjusted_returns(
 # 构造 interference 高低组虚拟变量
 # interference 衡量同一个 cue 场景中同时出现的其他公告数量
 
-def by_year_xtile_2(df, value_col, year_col="year"):
-    """
-    按年份把变量分成低/高两组：低组=1，高组=2。
-    """
-    def _split_one_year(s):
-        nonmissing = s.dropna()
+def xtile_by_group(s, n):
+    """按原文默认分位规则分组，并列值不拆分。"""
+    if n < 2:
+        raise ValueError("分组数量至少为2。")
 
-        # 如果该年份没有有效值，返回缺失
-        if nonmissing.empty:
-            return pd.Series(np.nan, index=s.index)
+    out = pd.Series(
+        pd.NA,
+        index=s.index,
+        dtype="Int64",
+    )
 
-        # 如果该年份有效取值不足以分成两组，则全部设为缺失
-        # 避免 pandas qcut 因重复断点报错
-        if nonmissing.nunique() < 2:
-            return pd.Series(np.nan, index=s.index)
+    non_missing = s.dropna()
+    m = len(non_missing)
 
-        out = pd.Series(np.nan, index=s.index)
-
-        try:
-            out.loc[nonmissing.index] = pd.qcut(
-                nonmissing,
-                q=2,
-                labels=[1, 2],
-                duplicates="drop"
-            ).astype(float)
-        except ValueError:
-            out.loc[nonmissing.index] = np.nan
-
+    if m == 0:
         return out
 
-    return df.groupby(year_col, group_keys=False)[value_col].apply(_split_one_year)
+    values = non_missing.to_numpy(dtype="float64")
+    sorted_values = np.sort(values)
+    cutpoints = np.empty(n - 1, dtype="float64")
 
+    for k in range(1, n):
+        lower_index, remainder = divmod(m * k, n)
+
+        if remainder == 0:
+            cutpoints[k - 1] = (
+                sorted_values[lower_index - 1]
+                + sorted_values[lower_index]
+            ) / 2
+        else:
+            cutpoints[k - 1] = sorted_values[lower_index]
+
+    groups = (
+        np.searchsorted(cutpoints, values, side="left") + 1
+    )
+
+    out.loc[non_missing.index] = groups
+    return out
+
+
+def by_year_xtile_2(df, value_col, year_col="year"):
+    """按年份分为低组1、高组2，缺失保留。"""
+    return (
+        df.groupby(year_col)[value_col]
+        .transform(
+            lambda s: xtile_by_group(s, n=2).astype("float64")
+        )
+    )
 # ============================================================
 # 构造干扰指标的年度高低分组
 # ============================================================
@@ -2359,24 +2375,8 @@ def add_interference_groups(daily_panel):
 
 # 把 cue 的盈余惊喜变量分成五分位
 def xtile_nq(series, q):
-    """
-    按分位点阈值分组，重复值很多时，允许某些组为空，不把整列设为缺失。
-    """
-    out = pd.Series(np.nan, index=series.index)
-    nonmissing = series.dropna()
-
-    if nonmissing.empty:
-        return out
-
-    probs = [k / q for k in range(1, q)]
-    cutoffs = nonmissing.quantile(probs).to_numpy()
-
-    values = nonmissing.to_numpy()
-    groups = np.searchsorted(cutoffs, values, side="right") + 1
-
-    out.loc[nonmissing.index] = groups
-    return out
-
+    """对整列按原文规则进行分位分组，缺失保留。"""
+    return xtile_by_group(series, n=q).astype("float64")
 
 # ============================================================
 # 构造提示公司盈余惊喜均值的五分位组

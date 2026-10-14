@@ -104,8 +104,8 @@ own_ea_cols = (
 
 # 其余重大事件列
 disclosure_cols = [
-    "ownMajorDisclosure",
-    "ownPerformanceForecast",
+    "ownOtherEventER",
+    "ownPerformanceForecastBrief",
 ]
 
 # 新闻列
@@ -583,8 +583,8 @@ print(regression_check.to_string(index=False))
 
 # 控制其他重大事件
 table2_disclosure_cols = [
-    "ownMajorDisclosure",
-    "ownPerformanceForecast",
+    "ownOtherEventER",
+    "ownPerformanceForecastBrief",
 ]
 
 # 完整控制变量：自身盈余公告列、其他重大事件列、媒体变量
@@ -1447,8 +1447,8 @@ own_ea_cols = (
 )
 
 disclosure_cols = [
-    "ownMajorDisclosure",
-    "ownPerformanceForecast",
+    "ownOtherEventER",
+    "ownPerformanceForecastBrief",
 ]
 
 media_cols = [
