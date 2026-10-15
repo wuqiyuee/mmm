@@ -123,7 +123,7 @@ WINSOR_TAIL = 0.01
 # 双侧显著性水平与置信区间的对应关系：
 # 1%、5%、10% 显著性水平分别对应 99%、95%、90% 置信区间。
 # 从最长区间到最短区间依次绘制。采用浅灰、蓝灰、深蓝的克制配色，
-# 同时用递增线宽区分层级；不绘制端帽，减少50个点叠加时的视觉噪声。
+# 同时用递增线宽区分层级；不绘制端帽，减少51个点叠加时的视觉噪声。
 ERROR_BAR_SPECS = (
     {
         "label": "99%置信区间（1%水平）",
@@ -162,7 +162,7 @@ TARGET_TD_COL = "_target_td"
 
 SAMPLE_MODE_LABELS = {
     "available": "逐日可用样本",
-    "common50": "51日完整共同样本（含事件当日）",
+    "common51": "51日完整共同样本（含事件当日）",
 }
 
 BASE_SOURCE_LABELS = {
@@ -433,7 +433,7 @@ def read_base_panel(path: Path) -> pd.DataFrame:
             f"{duplicate_count:,} 条重复观测。"
         )
 
-    # 右端变量和固定效应均与相对日无关，提前统一筛除可以减少50次合并量。
+    # 右端变量和固定效应均与相对日无关，提前统一筛除可以减少51次合并量。
     invariant_columns = [
         "StkcdRecall",
         "Trddt",
@@ -677,9 +677,9 @@ def validate_results(
     sample_label: str,
     base_label: str,
 ) -> None:
-    """绘图前校验50个相对日、统计量和口径元数据。"""
+    """绘图前校验51个相对日、统计量和口径元数据。"""
     if len(results) != len(HORIZONS):
-        raise ValueError("单日收益结果未包含全部50个相对交易日。")
+        raise ValueError("单日收益结果未包含全部51个相对交易日。")
     if results["窗口序号"].astype(int).tolist() != HORIZONS:
         raise ValueError("单日收益相对日不完整或顺序错误。")
 
@@ -752,7 +752,7 @@ def draw_single_day_figure(
     output_path: Path,
     sample_label: str,
 ) -> None:
-    """绘制50个单日系数及逐点99%、95%、90%置信区间。"""
+    """绘制51个单日系数及逐点99%、95%、90%置信区间。"""
     plot_data = results.sort_values("窗口序号").reset_index(drop=True)
 
     font_path = Path("/System/Library/Fonts/Hiragino Sans GB.ttc")
@@ -843,7 +843,7 @@ def parse_args() -> argparse.Namespace:
         default="available",
         help=(
             "available=每个相对日使用该日可用样本；"
-            "common50=50个相对日均有效的共同样本。"
+            "common51=51个相对日均有效的共同样本。"
         ),
     )
     parser.add_argument(
@@ -885,8 +885,8 @@ def main() -> None:
         f"下界={winsor_lower:.10f}，上界={winsor_upper:.10f}"
     )
 
-    if args.sample_mode == "common50":
-        print("正在识别50个相对交易日均有效的共同样本……")
+    if args.sample_mode == "common51":
+        print("正在识别51个相对交易日均有效的共同样本……")
         common_mask = build_common_sample_mask(
             base,
             daily_lookup,
@@ -896,7 +896,7 @@ def main() -> None:
         base = base.loc[common_mask].reset_index(drop=True)
         print(f"共同样本筛选删除观测数：{removed:,}")
         if base.empty:
-            raise ValueError("50日完整共同样本为空。")
+            raise ValueError("51日完整共同样本为空。")
 
     existing_rows = load_completed_rows(
         resume=args.resume,
@@ -979,7 +979,7 @@ def main() -> None:
         gc.collect()
 
     if not pending:
-        print("已有结果包含全部50个相对交易日，无需重新估计。")
+        print("已有结果包含全部51个相对交易日，无需重新估计。")
         results = save_results(existing_rows, result_path)
 
     validate_results(

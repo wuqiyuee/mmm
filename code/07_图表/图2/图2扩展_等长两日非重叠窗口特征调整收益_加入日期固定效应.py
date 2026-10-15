@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,7 +48,14 @@ import matplotlib
 import numpy as np
 import pandas as pd
 
-from 图2图3扩展_日期固定效应回归公共模块 import require_columns, run_date_fe_regression
+# 公共回归模块位于当前“图2”目录的上一级
+MODULE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(MODULE_DIR))
+
+from 图2图3扩展_日期固定效应回归公共模块 import (
+    require_columns,
+    run_date_fe_regression,
+)
 
 
 matplotlib.use("Agg")
@@ -55,7 +63,7 @@ import matplotlib.pyplot as plt
 from matplotlib import font_manager
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
 NEUTRAL_BASE_PATH = (
     ROOT
