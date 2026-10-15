@@ -39,7 +39,7 @@ import matplotlib
 import numpy as np
 import pandas as pd
 
-from 收益动态回归核心 import require_columns, run_date_fe_regression
+from 图2图3扩展_日期固定效应回归公共模块 import require_columns, run_date_fe_regression
 
 
 matplotlib.use("Agg")

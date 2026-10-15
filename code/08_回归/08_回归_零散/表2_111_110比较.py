@@ -73,8 +73,8 @@ OWN_EA_COLS = (
     + [f"ownEA_tp{i}" for i in range(1, 11)]
 )
 DISCLOSURE_COLS = [
-    "ownMajorDisclosure",
-    "ownPerformanceForecast",
+    "ownOtherEventER",
+    "ownPerformanceForecastBrief",
 ]
 MEDIA_COLS = [
     "aesIncrease",
@@ -590,8 +590,8 @@ def _display_variable(variable: str) -> str:
     labels = {
         "quarterLag1size90plus": "线索事件",
         "ownEA": "自身盈余公告 [t]",
-        "ownMajorDisclosure": "其他专题事件 [t]",
-        "ownPerformanceForecast": "业绩预告或快报 [t]",
+        "ownOtherEventER": "其他专题事件 [t]",
+        "ownPerformanceForecastBrief": "业绩预告或快报 [t]",
         "aesIncrease": "被提示公司新闻情绪上升 [t]",
         "aesDecrease": "被提示公司新闻情绪下降 [t]",
         "logIncreaseAEV": "log(1 + 新闻量增加)",

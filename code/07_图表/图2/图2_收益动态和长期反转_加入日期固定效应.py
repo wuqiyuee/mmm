@@ -1,22 +1,24 @@
 """
-在不覆盖现有图2的前提下，额外估计并绘制加入交易日期固定效应的
-“收益动态和长期反转”。
+估计并绘制加入交易日期固定效应的图2“收益动态和长期反转”。
 
 固定效应：
 1. 被提示公司 × 年度季度；
 2. 交易日期。
 
-标准误仍按被提示公司和交易日期双向聚类。因变量、控制变量、
-样本口径、事件窗口和百分比单位均与现有图2保持一致。
+标准误按被提示公司和交易日期双向聚类，并采用有限样本修正。
+当前合并绘图脚本也已开启有限样本修正。
 
-收益因变量直接使用已经完成全样本1%/99%缩尾的“_w”变量，
-本脚本不再次缩尾。双向聚类协方差采用有限样本修正，以对齐表2
-规格（6）和现有日期固定效应系列。现有原文复现图2没有显式启用
-该修正，因此两张图的标准误差异同时包含日期固定效应和有限样本
-修正的影响；系数不受协方差修正影响。
+因变量使用最终回归面板中已经缩尾的累计特征调整收益变量，
+本脚本不再次缩尾。控制变量与当前合并绘图脚本保持一致。
 
-运行过程中每完成一个窗口就保存一次结果。使用 --resume 可以从
-已有结果继续估计；已有但诊断字段不完整的窗口会自动重新估计。
+共估计50个累计窗口：[t,t+1]至[t,t+50]。
+系数、标准误和置信区间统一转换为百分点。
+图中展示99%、95%、90%正态近似置信区间；
+红点表示对应窗口在10%水平上显著。
+
+每完成一个窗口就保存一次结果。
+仅在输入数据和回归设置未变化时，使用 --resume（续算参数）。
+输入或回归设置变化后，应从头重新估计。
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ import matplotlib.pyplot as plt
 from matplotlib import font_manager
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
 PATTERN_PATH = (
     ROOT
@@ -78,8 +80,8 @@ OWN_EA_COLS = (
 )
 
 DISCLOSURE_COLS = [
-    "ownMajorDisclosure",
-    "ownPerformanceForecast",
+    "ownOtherEventER",              # 被提示公司自身专题事件
+    "ownPerformanceForecastBrief",  # 被提示公司自身业绩预告或快报
 ]
 
 MEDIA_COLS = [
@@ -1619,12 +1621,30 @@ def draw_figure2_date_fe(
             ],
         )
 
+    # 与图中90%置信区间一致，判断10%水平显著性
+    significant = (
+        np.abs(coefficients)
+        > 1.6448536269514722 * standard_errors
+    )
+
+    # 显著用红色，其余用黑色
+    point_colors = np.where(significant, "#d62728", "#1a1a1a")
+
     axis.scatter(
         x_values,
         coefficients,
-        color="#1a1a1a",
+        color=point_colors,
         s=16,
         zorder=4,
+    )
+
+    # 只添加红点图例，不增加实际数据点
+    axis.scatter(
+        [],
+        [],
+        color="#d62728",
+        s=16,
+        label="红点：10%水平显著",
     )
 
     axis.axhline(
@@ -1643,7 +1663,7 @@ def draw_figure2_date_fe(
     )
 
     axis.set_ylabel(
-        "收益（%）"
+        "提示变量系数（百分点）"
     )
 
     ticks = [

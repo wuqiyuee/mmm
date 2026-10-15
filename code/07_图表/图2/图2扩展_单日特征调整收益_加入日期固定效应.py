@@ -1,5 +1,5 @@
 """
-估计并绘制公告后 t+1 至 t+50 的单日特征调整收益动态。
+估计并绘制事件当日至第50个交易日的单日特征调整收益动态，共51个点。
 
 新的被解释变量不是 [t,t+h] 累计收益，也不是累计收益的一阶差分，
 而是被提示公司在目标交易日 t+h 的当日 DGTW 特征调整收益率：
@@ -10,7 +10,7 @@
 缺少目标日观测时保持缺失，不将停牌、退市或样本边界缺失填成 0。
 
 主规格默认使用“旧累计因变量筛选前的中性基础面板”，每个相对日
-使用该日因变量可用的观测。命令行可切换为 50 日完整共同样本，
+使用该日因变量可用的观测。命令行可切换为 51 日完整共同样本，
 也可使用旧最终回归面板做可比性检验。三个口径使用不同结果文件，
 不会覆盖现有累计收益图2及其结果。
 
@@ -21,7 +21,7 @@
 4. 双向聚类协方差使用与现有日期固定效应版图2一致的有限样本修正。
 
 收益率在 DGTW 股票日度源表上使用同一组 1%/99% 阈值缩尾，随后
-再匹配到各相对交易日。这样 50 个点不会因分别估计缩尾阈值而改变
+再匹配到各相对交易日。这样 51 个点不会因分别估计缩尾阈值而改变
 量纲。每完成一个相对日就原子保存一次结果，--resume 可继续估计。
 """
 
@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import sys
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
@@ -36,7 +37,14 @@ import matplotlib
 import numpy as np
 import pandas as pd
 
-from 收益动态回归核心 import require_columns, run_date_fe_regression
+# 公共回归模块位于当前“图2”目录的上一级
+MODULE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(MODULE_DIR))
+
+from 图2图3扩展_日期固定效应回归公共模块 import (
+    require_columns,
+    run_date_fe_regression,
+)
 
 
 matplotlib.use("Agg")
@@ -44,7 +52,7 @@ import matplotlib.pyplot as plt
 from matplotlib import font_manager
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
 NEUTRAL_BASE_PATH = (
     ROOT
@@ -64,9 +72,10 @@ DAILY_ADJUSTED_RETURN_PATH = (
     ROOT
     / "中间结果"
     / "02_变量构造结果"
-    / "DGTW"
+    / "1DGTW特征调整收益率"
     / "DGTW特征调整收益率.csv"
 )
+
 
 RESULT_DIR = (
     ROOT
@@ -92,8 +101,8 @@ OWN_EA_COLS = (
 )
 
 DISCLOSURE_COLS = [
-    "ownMajorDisclosure",
-    "ownPerformanceForecast",
+    "ownOtherEventER",              # 被提示公司自身专题事件
+    "ownPerformanceForecastBrief",  # 被提示公司自身业绩预告或快报
 ]
 
 MEDIA_COLS = [
@@ -153,7 +162,7 @@ TARGET_TD_COL = "_target_td"
 
 SAMPLE_MODE_LABELS = {
     "available": "逐日可用样本",
-    "common50": "50日完整共同样本",
+    "common50": "51日完整共同样本（含事件当日）",
 }
 
 BASE_SOURCE_LABELS = {
@@ -366,21 +375,48 @@ def read_base_panel(path: Path) -> pd.DataFrame:
         nrows=0,
         encoding="utf-8-sig",
     ).columns.tolist()
-    missing = sorted(set(BASE_READ_COLS) - set(available))
+        # 新名称对应中性基础面板保留的旧接口名称
+    aliases = {
+        "ownOtherEventER": "ownMajorDisclosure",
+        "ownPerformanceForecastBrief": "ownPerformanceForecast",
+    }
+
+    # 优先读取新名称；源表只有旧名称时，读取对应旧列
+    source_columns = {
+        column: (
+            column
+            if column in available
+            else aliases.get(column, column)
+        )
+        for column in BASE_READ_COLS
+    }
+
+    missing = sorted(set(source_columns.values()) - set(available))
     if missing:
         raise ValueError(f"回归基础面板缺少变量：{missing}")
 
-    numeric_columns = [column for column in RHS_COLS]
     data = pd.read_csv(
         path,
-        usecols=BASE_READ_COLS,
+        usecols=list(source_columns.values()),
         dtype={
             "StkcdRecall": "string",
             "yearQuarter": "string",
-            **{column: "float32" for column in numeric_columns},
+            **{
+                source_columns[column]: "float32"
+                for column in RHS_COLS
+            },
         },
         parse_dates=["Trddt"],
         encoding="utf-8-sig",
+    )
+
+    # 读入后统一使用新名称
+    data = data.rename(
+        columns={
+            source: target
+            for target, source in source_columns.items()
+            if source != target
+        }
     )
 
     data["StkcdRecall"] = normalize_stock_code_series(
@@ -741,24 +777,45 @@ def draw_single_day_figure(
             zorder=spec["zorder"],
         )
 
+    # 与图中90%置信区间一致，判断10%水平显著性
+    significant = (
+        plot_data["线索系数"].abs()
+        > 1.6448536269514722 * plot_data["聚类标准误"]
+    )
+
+    # 显著用红色，其余用黑色
+    point_colors = np.where(significant, "#d62728", "#1a1a1a")
+
     axis.scatter(
         plot_data["窗口序号"],
         plot_data["线索系数"],
-        color="#1a1a1a",
+        color=point_colors,
         s=16,
         zorder=4,
     )
+
+    # 只添加红点图例，不增加实际数据点
+    axis.scatter(
+        [],
+        [],
+        color="#d62728",
+        s=16,
+        label="红点：10%水平显著",
+    )
     axis.axhline(0, color="#333333", linewidth=0.8)
     axis.set_title(
-        "公告后单日特征调整收益动态"
+        "事件当日及之后的单日特征调整收益动态"
         f"（控制交易日期固定效应，{sample_label}）"
     )
     axis.set_xlabel("相对交易日")
-    axis.set_ylabel("单日特征调整收益率（百分点）")
+    axis.set_ylabel("提示变量系数（百分点）")
 
-    ticks = [1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+    ticks = [0, 1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
     axis.set_xticks(ticks)
-    axis.set_xticklabels([f"t+{tick}" for tick in ticks])
+    axis.set_xticklabels([
+        "t" if tick == 0 else f"t+{tick}"
+        for tick in ticks
+    ])
     axis.legend(
         loc="upper right",
         frameon=False,
@@ -778,7 +835,7 @@ def draw_single_day_figure(
 def parse_args() -> argparse.Namespace:
     """读取样本口径和续算参数。"""
     parser = argparse.ArgumentParser(
-        description="估计公告后50个交易日的单日特征调整收益动态。"
+        description="估计事件当日至第50个交易日的单日特征调整收益动态，共51个点。"
     )
     parser.add_argument(
         "--sample-mode",

@@ -60,7 +60,6 @@ ANALYST_RELATIVE_ROOT = Path(
 
 EVENT_DATE_MODE = "next_if_nontrading"
 MARKETCAP_BREAKPOINT_MODE = "prev_month"
-DROP_ANALYST_OVERLAP = True
 ANALYST_ID_MODE = "split"
 ANALYST_LOOKBACK_DAYS = 365
 CHUNK_SIZE = 1_000_000
@@ -442,10 +441,11 @@ def process_memory_chunk(
         how="left",
         validate="m:1",
     )
-    if DROP_ANALYST_OVERLAP:
-        mm_key = mm_key.loc[
-            mm_key["same_analyst_overlap"].isna()
-        ].copy()
+
+    # 固定排除已识别存在共同分析师覆盖的公司对。
+    mm_key = mm_key.loc[
+        mm_key["same_analyst_overlap"].isna()
+    ].copy()
 
     mm_key_keep = mm_key[key_cols].drop_duplicates()
     mm = mm.merge(
@@ -588,6 +588,17 @@ def main() -> None:
     args = parse_args()
     root = (args.root or find_project_root()).resolve()
     print(f"项目根目录：{root}")
+
+    if EVENT_DATE_MODE not in {
+        "next_if_nontrading",
+        "strict_next_trading",
+    }:
+        raise ValueError(
+            "事件日期参数只能是 "
+            "'next_if_nontrading'（仅非交易日顺延）或 "
+            "'strict_next_trading'（严格使用下一交易日）。"
+            f"当前值为：{EVENT_DATE_MODE!r}"
+        )
 
     calendar = load_calendar(root)
     market = load_market_panel(root)
