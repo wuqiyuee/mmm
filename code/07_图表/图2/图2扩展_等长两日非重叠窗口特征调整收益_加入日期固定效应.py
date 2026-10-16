@@ -83,7 +83,7 @@ DGTW_ADJUSTED_RETURN_PATH = (
     ROOT
     / "中间结果"
     / "02_变量构造结果"
-    / "DGTW"
+    / "1DGTW特征调整收益率"
     / "DGTW特征调整收益率.csv"
 )
 
@@ -112,8 +112,8 @@ OWN_EA_COLS = (
 )
 
 DISCLOSURE_COLS = [
-    "ownMajorDisclosure",
-    "ownPerformanceForecast",
+    "ownOtherEventER",              # 被提示公司自身专题事件
+    "ownPerformanceForecastBrief",  # 被提示公司自身业绩预告或快报
 ]
 
 MEDIA_COLS = [
@@ -360,21 +360,51 @@ def read_base_panel(path: Path) -> pd.DataFrame:
         nrows=0,
         encoding="utf-8-sig",
     ).columns.tolist()
-    missing = sorted(set(BASE_READ_COLS) - set(available))
+    # 新名称对应中性基础面板保留的旧接口名称
+    aliases = {
+        "ownOtherEventER": "ownMajorDisclosure",
+        "ownPerformanceForecastBrief": "ownPerformanceForecast",
+    }
+
+    # 优先读取新名称；源表只有旧名称时，读取对应旧列
+    source_columns = {
+        column: (
+            column
+            if column in available
+            else aliases.get(column, column)
+        )
+        for column in BASE_READ_COLS
+    }
+
+    missing = sorted(set(source_columns.values()) - set(available))
     if missing:
         raise ValueError(f"回归基础面板缺少变量：{missing}")
 
     data = pd.read_csv(
         path,
-        usecols=BASE_READ_COLS,
+        usecols=list(source_columns.values()),
         dtype={
             "StkcdRecall": "string",
             "yearQuarter": "string",
-            **{column: "float32" for column in RHS_COLS},
+            **{
+                source_columns[column]: "float32"
+                for column in RHS_COLS
+            },
         },
         parse_dates=["Trddt"],
         encoding="utf-8-sig",
     )
+
+    # 读入后统一使用新名称
+    data = data.rename(
+        columns={
+            source: target
+            for target, source in source_columns.items()
+            if source != target
+        }
+    )
+
+    # 标准化股票代码，并确认交易日序号为整数
     data["StkcdRecall"] = normalize_stock_code_series(data["StkcdRecall"])
     data["td"] = coerce_required_integer(data["td"], "td")
 
@@ -881,12 +911,28 @@ def draw_two_day_figure(
             zorder=interval_spec["zorder"],
         )
 
+    # 按10%显著性水平判断：90%置信区间不包含0
+    significant = (
+        plot_data["线索系数"].abs()
+        > 1.6448536269514722 * plot_data["聚类标准误"]
+    )
+    point_colors = np.where(significant, "#d62728", "#1a1a1a")
+
     axis.scatter(
         x_positions,
         plot_data["线索系数"],
-        color="#1a1a1a",
+        color=point_colors,
         s=24,
         zorder=4,
+    )
+
+    # 添加红点图例
+    axis.scatter(
+        [],
+        [],
+        color="#d62728",
+        s=24,
+        label="红点：10%水平显著",
     )
     axis.axhline(0, color="#333333", linewidth=0.8)
     axis.set_title(
@@ -894,7 +940,7 @@ def draw_two_day_figure(
         f"（控制事件起点交易日期固定效应，{sample_label}）"
     )
     axis.set_xlabel("等长两日事件窗口")
-    axis.set_ylabel("两日特征调整收益率（百分点）")
+    axis.set_ylabel("提示变量系数（百分点）")
     axis.set_xticks(x_positions)
     axis.set_xticklabels(
         plot_data["事件窗口"].tolist(),

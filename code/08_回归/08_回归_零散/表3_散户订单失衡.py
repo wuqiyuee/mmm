@@ -84,8 +84,8 @@ OWN_EA_COLS = (
 )
 
 DISCLOSURE_COLS = [
-    "ownMajorDisclosure",
-    "ownPerformanceForecast",
+    "ownOtherEventER",
+    "ownPerformanceForecastBrief",
 ]
 
 MEDIA_COLS = [
@@ -132,9 +132,18 @@ def significance_stars(p_value: float) -> str:
 
 def winsorize_1pct(series: pd.Series) -> pd.Series:
     """把变量的上下各1%观测缩尾到相应分位点。"""
-    valid = pd.to_numeric(series, errors="coerce")
+    valid = pd.to_numeric(
+        series,
+        errors="coerce",
+    ).replace([np.inf, -np.inf], np.nan)
+    if valid.notna().sum() == 0:
+        raise ValueError("订单失衡变量没有可用于计算缩尾阈值的观测。")
+
     lower = valid.quantile(0.01)
     upper = valid.quantile(0.99)
+    if not np.isfinite([lower, upper]).all() or lower > upper:
+        raise ValueError("订单失衡变量无法计算有效的1%/99%缩尾阈值。")
+
     return valid.clip(lower=lower, upper=upper)
 
 
@@ -205,6 +214,14 @@ def read_table3_date_fe_data() -> pd.DataFrame:
         parse_dates=["Trddt"],
     )
 
+    if data[["StkcdRecall", "Trddt", "yearQuarter"]].isna().any().any():
+        raise ValueError(
+            "表3主样本的公司代码、交易日期或年度季度存在缺失。"
+        )
+
+    for column in numeric_cols:
+        data[column] = data[column].replace([np.inf, -np.inf], np.nan)
+
     data["StkcdRecall"] = (
         data["StkcdRecall"]
         .str.strip()
@@ -246,6 +263,14 @@ def read_table3_date_fe_data() -> pd.DataFrame:
         dtype=oib_dtype,
         parse_dates=["Trddt"],
     )
+
+    if oib[["Stkcd", "Trddt"]].isna().any().any():
+        raise ValueError(
+            "订单失衡表的股票代码或交易日期存在缺失。"
+        )
+
+    for column in OIB_RAW_COLS:
+        oib[column] = oib[column].replace([np.inf, -np.inf], np.nan)
 
     oib["Stkcd"] = (
         oib["Stkcd"]
@@ -309,6 +334,10 @@ def run_table3_date_fe_regression(
     ))
 
     reg = data[needed].dropna().copy()
+    if reg.empty:
+        raise ValueError(
+            f"因变量 {outcome} 与解释变量合并删除缺失值后没有可用观测。"
+        )
 
     reg["_fe_firm_yearquarter"] = (
         reg.groupby(
@@ -337,6 +366,11 @@ def run_table3_date_fe_regression(
             ],
         )
     )
+
+    if reg.empty:
+        raise ValueError(
+            f"因变量 {outcome} 删除固定效应单例组后没有可用观测。"
+        )
 
     absorb = pd.DataFrame(
         {
@@ -376,6 +410,12 @@ def run_table3_date_fe_regression(
         clusters=clusters,
         debiased=True,
     )
+
+    if CUE_COL not in result.params.index:
+        raise ValueError(
+            f"因变量 {outcome} 中的线索变量被固定效应完全吸收，"
+            "无法报告线索系数。"
+        )
 
     beta = float(result.params[CUE_COL])
     standard_error = float(
@@ -509,8 +549,8 @@ def _table3_variable_label(variable: str) -> str:
     labels = {
         CUE_COL: "线索事件",
         "ownEA": "自身盈余公告 [t]",
-        "ownMajorDisclosure": "其他专题事件 [t]",
-        "ownPerformanceForecast": "业绩预告或快报 [t]",
+        "ownOtherEventER": "其他专题事件 [t]",
+        "ownPerformanceForecastBrief": "业绩预告或快报 [t]",
         "aesIncrease": "被提示公司新闻情绪上升 [t]",
         "aesDecrease": "被提示公司新闻情绪下降 [t]",
         "logIncreaseAEV": "log(1 + 新闻量增加)",
@@ -532,7 +572,7 @@ def draw_table3_date_fe_full(
     details: pd.DataFrame,
     output_path: Path,
 ) -> None:
-    """在本脚本内直接绘制表3日期固定效应版的完整系数表。"""
+    """绘制与集中绘表脚本一致的论文式表3三线表。"""
     window_order = ["[t, t+1]", "[t, t+10]"]
     model_rows = []
     for window in window_order:
@@ -550,8 +590,7 @@ def draw_table3_date_fe_full(
         (row["订单失衡窗口"], row["变量"]): row
         for _, row in details.iterrows()
     }
-    rows: list[list[str]] = []
-    bold_rows: set[int] = set()
+    rows: list[dict[str, object]] = []
     for variable in variables:
         coefficient_values, standard_error_values = [], []
         for model in model_rows:
@@ -563,83 +602,245 @@ def draw_table3_date_fe_full(
             )
             coefficient_values.append(coefficient)
             standard_error_values.append(standard_error)
-        bold_rows.add(len(rows))
-        rows.append([_table3_variable_label(variable), *coefficient_values])
-        rows.append(["", *standard_error_values])
+
+        rows.extend([
+            {
+                "kind": "coefficient",
+                "label": _table3_variable_label(variable),
+                "values": coefficient_values,
+                "bold": variable == CUE_COL,
+                "line_before": variable == OWN_EA_COLS[0],
+            },
+            {
+                "kind": "standard_error",
+                "label": "",
+                "values": standard_error_values,
+                "color": "#444444",
+            },
+        ])
 
     rows.extend([
-        ["控制变量", *[str(row["控制变量"]) for row in model_rows]],
-        ["交易日期固定效应", *[str(row["日期固定效应"]) for row in model_rows]],
-        [
-            "被提示公司×年度季度固定效应",
-            *[str(row["被提示公司×年度季度固定效应"]) for row in model_rows],
-        ],
-        ["样本量", *[f"{int(row['回归样本量']):,}" for row in model_rows]],
-        ["R²", *[f"{float(row['R方']):.4f}" for row in model_rows]],
+        {
+            "kind": "stat",
+            "label": "控制变量",
+            "values": [str(row["控制变量"]) for row in model_rows],
+            "line_before": True,
+        },
+        {
+            "kind": "stat",
+            "label": "交易日期固定效应",
+            "values": [str(row["日期固定效应"]) for row in model_rows],
+        },
+        {
+            "kind": "stat",
+            "label": "被提示公司×年度季度固定效应",
+            "values": [
+                str(row["被提示公司×年度季度固定效应"])
+                for row in model_rows
+            ],
+        },
+        {
+            "kind": "stat",
+            "label": "样本量",
+            "values": [
+                f"{int(row['回归样本量']):,}" for row in model_rows
+            ],
+        },
+        {
+            "kind": "stat",
+            "label": "R²",
+            "values": [f"{float(row['R方']):.4f}" for row in model_rows],
+        },
     ])
 
-    figure_height = max(12.0, 5.4 + 0.23 * len(rows))
+    row_heights = {
+        "coefficient": 0.88,
+        "standard_error": 0.76,
+        "stat": 0.88,
+    }
+    notes = [
+        "注：所有模型同时吸收被提示公司×年度季度和交易日期固定效应；",
+        "括号内为按被提示公司和交易日期双向聚类的标准误；"
+        "*、**、*** 分别表示在10%、5%和1%水平上显著。",
+    ]
+    title_height = 5.0
+    header_height = 2.78
+    notes_height = 0.85 * len(notes) + 0.75
+    body_height = sum(row_heights[row["kind"]] for row in rows)
+    total_height = (
+        title_height
+        + header_height
+        + body_height
+        + notes_height
+    )
+    figure_height = max(7.5, total_height * 0.29)
+
     figure, axes = plt.subplots(figsize=(12.0, figure_height))
+    figure.subplots_adjust(
+        left=0.02,
+        right=0.985,
+        top=0.97,
+        bottom=0.03,
+    )
     figure.patch.set_facecolor("white")
+    axes.set_facecolor("white")
+    axes.set_xlim(0, 1)
+    axes.set_ylim(total_height, 0)
     axes.axis("off")
-    axes.text(
-        0.01,
-        0.988,
-        "表 3：线索事件与散户订单失衡（加入交易日期固定效应）",
-        ha="left",
-        va="top",
-        fontsize=16,
-        fontproperties=FONT_BOLD,
-    )
-    axes.text(
-        0.01,
-        0.957,
-        "因变量为按成交量衡量的小单订单失衡；系数与括号内双向聚类标准误的单位均为百分点",
-        ha="left",
-        va="top",
-        fontsize=8.6,
-        color="#444444",
-        fontproperties=FONT,
-    )
-    table = axes.table(
-        cellText=rows,
-        colLabels=["变量", *window_order],
-        cellLoc="center",
-        colLoc="center",
-        colWidths=[0.50, 0.25, 0.25],
-        bbox=[0.01, 0.08, 0.98, 0.84],
-    )
-    table.auto_set_font_size(False)
-    table.set_fontsize(7.4)
-    for (row_index, column_index), cell in table.get_celld().items():
-        cell.set_edgecolor("#9AA3AA")
-        cell.set_linewidth(0.28)
-        cell.set_facecolor("#F4F6F7" if row_index == 0 else "white")
-        cell.get_text().set_fontproperties(
-            FONT_BOLD
-            if row_index == 0 or (row_index - 1) in bold_rows
-            else FONT
+
+    label_right = 0.34
+    data_left = label_right + 0.012
+    data_right = 0.975
+    column_width = (data_right - data_left) / len(window_order)
+    column_lefts = [
+        data_left + column_width * index
+        for index in range(len(window_order))
+    ]
+    column_rights = [left + column_width for left in column_lefts]
+    column_centers = [
+        (left + right) / 2
+        for left, right in zip(column_lefts, column_rights)
+    ]
+
+    def draw_rule(y: float, linewidth: float = 0.8) -> None:
+        axes.plot(
+            [0.02, 0.985],
+            [y, y],
+            color="#222222",
+            linewidth=linewidth,
+            solid_capstyle="butt",
+            clip_on=False,
         )
-        if column_index == 0:
-            cell.get_text().set_ha("left")
+
     axes.text(
-        0.01,
-        0.045,
-        "注：所有模型同时吸收被提示公司×年度季度和交易日期固定效应；"
-        "*、**、*** 分别表示在 10%、5% 和 1% 水平上显著。",
+        0.02,
+        0.38,
+        "表 3（加入日期固定效应）",
         ha="left",
         va="top",
-        fontsize=7.2,
+        fontproperties=FONT_BOLD,
+        fontsize=21.0,
+    )
+    axes.text(
+        0.02,
+        2.02,
+        "线索事件与散户订单失衡",
+        ha="left",
+        va="top",
+        fontproperties=FONT_BOLD,
+        fontsize=19.0,
+    )
+    axes.text(
+        0.02,
+        3.52,
+        "因变量为按成交量衡量的小单订单失衡；"
+        "系数与括号内双向聚类标准误的单位均为百分点",
+        ha="left",
+        va="top",
         color="#444444",
         fontproperties=FONT,
+        fontsize=10.5,
     )
+
+    header_top = title_height
+    draw_rule(header_top, linewidth=1.0)
+    axes.text(
+        0.046,
+        header_top + 1.55,
+        "变量",
+        ha="left",
+        va="center",
+        fontproperties=FONT_BOLD,
+        fontsize=9.6,
+    )
+    axes.text(
+        (column_centers[0] + column_centers[-1]) / 2,
+        header_top + 0.42,
+        "因变量：按成交量衡量的小单订单失衡（百分点）",
+        ha="center",
+        va="center",
+        color="#333333",
+        fontproperties=FONT,
+        fontsize=9.1,
+    )
+    axes.text(
+        (column_centers[0] + column_centers[-1]) / 2,
+        header_top + 1.18,
+        "小单订单失衡（成交量口径）",
+        ha="center",
+        va="center",
+        fontproperties=FONT_BOLD,
+        fontsize=9.2,
+    )
+    for center, label in zip(column_centers, window_order):
+        axes.text(
+            center,
+            header_top + 2.16,
+            label,
+            ha="center",
+            va="center",
+            fontproperties=FONT_BOLD,
+            fontsize=9.2,
+        )
+
+    body_top = header_top + header_height
+    draw_rule(body_top, linewidth=0.9)
+    y = body_top
+    for row in rows:
+        kind = row["kind"]
+        height = row_heights[kind]
+        if row.get("line_before"):
+            draw_rule(y, linewidth=0.55)
+
+        center_y = y + height / 2
+        font = FONT_BOLD if row.get("bold", False) else FONT
+        color = row.get("color", "#111111")
+        label_x = 0.046 if kind != "standard_error" else 0.058
+        axes.text(
+            label_x,
+            center_y,
+            row["label"],
+            ha="left",
+            va="center",
+            color=color,
+            fontproperties=font,
+            fontsize=9.2,
+        )
+        for center, value in zip(column_centers, row["values"]):
+            axes.text(
+                center,
+                center_y,
+                value,
+                ha="center",
+                va="center",
+                color=color,
+                fontproperties=font,
+                fontsize=9.2,
+            )
+        y += height
+
+    draw_rule(y, linewidth=1.0)
+    note_y = y + 0.72
+    for note in notes:
+        axes.text(
+            0.02,
+            note_y,
+            note,
+            ha="left",
+            va="top",
+            color="#444444",
+            fontproperties=FONT,
+            fontsize=8.7,
+        )
+        note_y += 0.82
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(
         output_path,
         dpi=300,
-        bbox_inches="tight",
         facecolor="white",
-        pad_inches=0.08,
+        bbox_inches="tight",
+        pad_inches=0.12,
     )
     plt.close(figure)
 

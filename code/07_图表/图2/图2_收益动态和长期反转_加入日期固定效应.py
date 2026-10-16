@@ -25,13 +25,21 @@ from __future__ import annotations
 
 import argparse
 import gc
+import sys
 from pathlib import Path
 
 import matplotlib
 import numpy as np
 import pandas as pd
-from pyhdfe import create as create_hdfe
 from scipy import stats
+
+
+# 公共回归模块位于当前“图2”目录的上一级。
+MODULE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(MODULE_DIR))
+from 图2图3扩展_日期固定效应回归公共模块 import (
+    residualize_regression_data as residualize_regression_data_shared,
+)
 
 
 matplotlib.use("Agg")
@@ -403,118 +411,16 @@ def residualize_regression_data(
     reg: pd.DataFrame,
     outcome: str,
     fe_ids: np.ndarray,
-) -> tuple[
-    np.ndarray,
-    np.ndarray,
-]:
-    """
-    分列吸收被提示公司×年度季度和交易日期两组固定效应。
-
-    固定效应变换对各列是线性的，因此分批残差化与一次处理全部列
-    使用同一模型；分批处理可降低千万行样本的峰值内存。
-    """
-    algorithm = create_hdfe(
+) -> tuple[np.ndarray, np.ndarray]:
+    """调用公共季度直接解，并保留本脚本因变量的二维列向量结构。"""
+    y_residualized, x_residualized = residualize_regression_data_shared(
+        reg,
+        outcome,
+        RHS_COLS,
         fe_ids,
-        drop_singletons=False,
-        compute_degrees=False,
-        residualize_method="map",
-        options={
-            "tol": 1e-8,
-            "transform": "symmetric",
-            "acceleration": "cg",
-        },
+        batch_size=RESIDUALIZATION_BATCH_SIZE,
     )
-
-    all_columns = [
-        outcome
-    ] + RHS_COLS
-
-    y_residualized = np.empty(
-        (
-            len(reg),
-            1,
-        ),
-        dtype=np.float64,
-    )
-
-    x_residualized = np.empty(
-        (
-            len(reg),
-            len(RHS_COLS),
-        ),
-        dtype=np.float64,
-    )
-
-    for start in range(
-        0,
-        len(all_columns),
-        RESIDUALIZATION_BATCH_SIZE,
-    ):
-        stop = min(
-            (
-                start
-                + RESIDUALIZATION_BATCH_SIZE
-            ),
-            len(all_columns),
-        )
-
-        columns = (
-            all_columns[
-                start:stop
-            ]
-        )
-
-        values = reg[
-            columns
-        ].to_numpy(
-            dtype=np.float64,
-            copy=True,
-        )
-
-        residualized = (
-            algorithm.residualize(
-                values
-            )
-        )
-
-        if start == 0:
-            y_residualized[
-                :,
-                0,
-            ] = residualized[
-                :,
-                0,
-            ]
-
-            rhs_stop = stop - 1
-
-            if rhs_stop > 0:
-                x_residualized[
-                    :,
-                    0:rhs_stop,
-                ] = residualized[
-                    :,
-                    1:,
-                ]
-        else:
-            rhs_start = start - 1
-            rhs_stop = stop - 1
-
-            x_residualized[
-                :,
-                rhs_start:rhs_stop,
-            ] = residualized
-
-        del values, residualized
-        gc.collect()
-
-    del algorithm
-    gc.collect()
-
-    return (
-        y_residualized,
-        x_residualized,
-    )
+    return y_residualized.reshape(-1, 1), x_residualized
 
 
 def read_figure2_panel(

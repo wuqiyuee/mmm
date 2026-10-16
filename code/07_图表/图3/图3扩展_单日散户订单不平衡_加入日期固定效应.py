@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import sys
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
@@ -39,7 +40,14 @@ import matplotlib
 import numpy as np
 import pandas as pd
 
-from 图2图3扩展_日期固定效应回归公共模块 import require_columns, run_date_fe_regression
+# 将公共模块所在目录加入模块搜索路径
+MODULE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(MODULE_DIR))
+
+from 图2图3扩展_日期固定效应回归公共模块 import (
+    require_columns,
+    run_date_fe_regression,
+)
 
 
 matplotlib.use("Agg")
@@ -47,7 +55,7 @@ import matplotlib.pyplot as plt
 from matplotlib import font_manager
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
 NEUTRAL_BASE_PATH = (
     ROOT
@@ -67,7 +75,7 @@ DAILY_OIB_PATH = (
     ROOT
     / "中间结果"
     / "02_变量构造结果"
-    / "交易行为OIB、Avol"
+    / "2交易行为OIB、Avol"
     / "OIB_CSMAR_prep.csv"
 )
 
@@ -95,8 +103,8 @@ OWN_EA_COLS = (
 )
 
 DISCLOSURE_COLS = [
-    "ownMajorDisclosure",
-    "ownPerformanceForecast",
+    "ownOtherEventER",
+    "ownPerformanceForecastBrief",
 ]
 
 NEUTRAL_MEDIA_COLS = [
@@ -406,27 +414,56 @@ def read_base_panel(
         nrows=0,
         encoding="utf-8-sig",
     ).columns.tolist()
+
+    # 保留媒体控制变量的自动识别
     media_cols = detect_media_controls(available)
     control_cols = OWN_EA_COLS + DISCLOSURE_COLS + media_cols
     rhs_cols = [CUE_COL] + control_cols
     read_cols = list(dict.fromkeys(BASE_KEY_COLS + rhs_cols))
 
-    missing = sorted(set(read_cols) - set(available))
+    # 优先读取新名称，旧表没有新名称时读取对应旧名称
+    aliases = {
+        "ownOtherEventER": "ownMajorDisclosure",
+        "ownPerformanceForecastBrief": "ownPerformanceForecast",
+    }
+    source_columns = {
+        column: (
+            column
+            if column in available
+            else aliases.get(column, column)
+        )
+        for column in read_cols
+    }
+
+    missing = sorted(set(source_columns.values()) - set(available))
     if missing:
         raise ValueError(f"回归基础面板缺少变量：{missing}")
 
     data = pd.read_csv(
         path,
-        usecols=read_cols,
+        usecols=list(source_columns.values()),
         dtype={
             "StkcdRecall": "string",
             "yearQuarter": "string",
-            **{column: "float32" for column in rhs_cols},
+            **{
+                source_columns[column]: "float32"
+                for column in rhs_cols
+            },
         },
         parse_dates=["Trddt"],
         encoding="utf-8-sig",
     )
 
+    # 读入后统一使用新名称
+    data = data.rename(
+        columns={
+            source: target
+            for target, source in source_columns.items()
+            if source != target
+        }
+    )
+
+    # 标准化股票代码和交易日序号
     data["StkcdRecall"] = normalize_stock_code_series(
         data["StkcdRecall"]
     )
@@ -457,9 +494,45 @@ def read_base_panel(
     return data, media_cols, rhs_cols
 
 
+class DailyOutcomeLookup:
+    """一次建立公司×交易日索引，供所有相对日复用。"""
+
+    def __init__(self, daily_lookup: pd.DataFrame) -> None:
+        require_columns(
+            daily_lookup,
+            [
+                "StkcdRecall",
+                OUTCOME_TD_COL,
+                OUTCOME_DATE_COL,
+                OUTCOME_VALUE_COL,
+            ],
+            "单日OIB查找表",
+        )
+        key_index = pd.MultiIndex.from_frame(
+            daily_lookup[["StkcdRecall", OUTCOME_TD_COL]]
+        )
+        if not key_index.is_unique:
+            raise pd.errors.MergeError("单日OIB查找表的公司和交易日序号不唯一。")
+
+        self._values = daily_lookup[
+            [OUTCOME_TD_COL, OUTCOME_DATE_COL, OUTCOME_VALUE_COL]
+        ].copy(deep=False)
+        self._values.index = key_index
+
+    def match(self, base: pd.DataFrame, horizon: int) -> pd.DataFrame:
+        """精确定位目标市场交易日；未匹配的目标日保留缺失。"""
+        target_index = pd.MultiIndex.from_arrays(
+            [base["StkcdRecall"], base["td"] + int(horizon)],
+            names=["StkcdRecall", OUTCOME_TD_COL],
+        )
+        if not target_index.is_unique:
+            raise pd.errors.MergeError("回归基础面板的公司和交易日序号不唯一。")
+        return self._values.reindex(target_index).reset_index(drop=True)
+
+
 def attach_daily_outcome(
     base: pd.DataFrame,
-    daily_lookup: pd.DataFrame,
+    daily_lookup: pd.DataFrame | DailyOutcomeLookup,
     horizon: int,
 ) -> pd.DataFrame:
     """按 StkcdRecall 和 td+h 精确匹配一个相对日的单日OIB。"""
@@ -469,38 +542,20 @@ def attach_daily_outcome(
         raise ValueError("相对交易日序号不能为负数。")
 
     require_columns(base, ["StkcdRecall", "td"], "回归基础面板")
-    require_columns(
-        daily_lookup,
-        [
-            "StkcdRecall",
-            OUTCOME_TD_COL,
-            OUTCOME_DATE_COL,
-            OUTCOME_VALUE_COL,
-        ],
-        "单日OIB查找表",
+    lookup = (
+        daily_lookup
+        if isinstance(daily_lookup, DailyOutcomeLookup)
+        else DailyOutcomeLookup(daily_lookup)
     )
+    matched_values = lookup.match(base, int(horizon))
 
-    aligned = base.copy()
-    aligned[TARGET_TD_COL] = aligned["td"] + int(horizon)
-    aligned = aligned.merge(
-        daily_lookup,
-        left_on=["StkcdRecall", TARGET_TD_COL],
-        right_on=["StkcdRecall", OUTCOME_TD_COL],
-        how="left",
-        validate="1:1",
-    )
-
-    if len(aligned) != len(base):
-        raise ValueError("匹配单日OIB后基础面板行数发生变化。")
-
-    matched = aligned[OUTCOME_TD_COL].notna()
-    if not aligned.loc[
-        matched,
-        OUTCOME_TD_COL,
-    ].eq(aligned.loc[matched, TARGET_TD_COL]).all():
-        raise ValueError("目标交易日序号匹配错误。")
-
-    return aligned.drop(columns=[TARGET_TD_COL])
+    # 右端变量和起点日期均不随窗口改变。只新增三列目标日数据，
+    # 共享基础表的只读列，避免每轮复制整张控制变量宽表。
+    aligned = base.copy(deep=False)
+    aligned.index = pd.RangeIndex(len(base))
+    for column in matched_values.columns:
+        aligned[column] = matched_values[column].array
+    return aligned
 
 
 def build_common_sample_mask(
@@ -787,12 +842,28 @@ def draw_single_day_figure(
             zorder=spec["zorder"],
         )
 
+    # 按10%显著性水平判断：90%置信区间不包含0
+    significant = (
+        plot_data["线索系数"].abs()
+        > 1.6448536269514722 * plot_data["聚类标准误"]
+    )
+    point_colors = np.where(significant, "#d62728", "#1a1a1a")
+
     axis.scatter(
         plot_data["窗口序号"],
         plot_data["线索系数"],
-        color="#1a1a1a",
+        color=point_colors,
         s=16,
         zorder=4,
+    )
+
+    # 添加红点图例
+    axis.scatter(
+        [],
+        [],
+        color="#d62728",
+        s=16,
+        label="红点：10%水平显著",
     )
     axis.axhline(0, color="#333333", linewidth=0.8)
     axis.set_title(
@@ -800,7 +871,7 @@ def draw_single_day_figure(
         f"（控制交易日期固定效应，{sample_label}）"
     )
     axis.set_xlabel("相对交易日")
-    axis.set_ylabel("单日小单成交量订单不平衡（百分点）")
+    axis.set_ylabel("提示变量系数（百分点）")
 
     ticks = [0, 1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
     axis.set_xticks(ticks)
@@ -907,6 +978,7 @@ def main() -> None:
         if horizon not in completed
     ]
     rows = existing_rows.copy()
+    outcome_lookup = DailyOutcomeLookup(daily_lookup) if pending else None
 
     metadata = result_metadata(
         sample_label=sample_label,
@@ -922,7 +994,7 @@ def main() -> None:
         )
         aligned = attach_daily_outcome(
             base,
-            daily_lookup,
+            outcome_lookup,
             horizon,
         )
         valid_outcome = aligned[OUTCOME_VALUE_COL].notna()

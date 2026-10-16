@@ -76,8 +76,8 @@ OWN_EA_COLS = (
 )
 
 DISCLOSURE_COLS = [
-    "ownMajorDisclosure",
-    "ownPerformanceForecast",
+    "ownOtherEventER",
+    "ownPerformanceForecastBrief",
 ]
 
 MEDIA_COLS = [
@@ -522,8 +522,8 @@ def _table2_variable_label(variable):
     labels = {
         "quarterLag1size90plus": "线索事件",
         "ownEA": "自身盈余公告 [t]",
-        "ownMajorDisclosure": "其他专题事件 [t]",
-        "ownPerformanceForecast": "业绩预告或快报 [t]",
+        "ownOtherEventER": "其他专题事件 [t]",
+        "ownPerformanceForecastBrief": "业绩预告或快报 [t]",
         "aesIncrease": "被提示公司新闻情绪上升 [t]",
         "aesDecrease": "被提示公司新闻情绪下降 [t]",
         "logIncreaseAEV": "log(1 + 新闻量增加)",
@@ -589,13 +589,13 @@ def _save_table2_page(
     continued,
     include_model_stats,
 ):
-    """直接用 matplotlib（绘图库）保存表2完整系数表的一页图片。"""
-    column_labels = ["变量"] + [
-        f"{row['收益窗口']}\n{row['规格']}"
-        for row in model_rows
+    """按参考文档的横向页面（297×210毫米）绘制表2三线表。"""
+    column_labels = [row["规格"] for row in model_rows]
+    group_headers = [
+        (0, 5, "收益窗口 [t, t+1]"),
+        (6, 11, "收益窗口 [t, t+10]"),
     ]
     table_rows = []
-    bold_row_numbers = set()
 
     for variable in variables:
         coefficients = []
@@ -611,130 +611,262 @@ def _save_table2_page(
             coefficients.append(coefficient)
             standard_errors.append(standard_error)
 
-        bold_row_numbers.add(len(table_rows))
-        table_rows.append([
-            _table2_variable_label(variable),
-            *coefficients,
+        table_rows.extend([
+            {
+                "kind": "coefficient",
+                "label": _table2_variable_label(variable),
+                "values": coefficients,
+                "bold": variable == "quarterLag1size90plus",
+                "line_before": variable == "ownEA_tm10",
+            },
+            {
+                "kind": "standard_error",
+                "label": "",
+                "values": standard_errors,
+                "color": "#444444",
+            },
         ])
-        table_rows.append(["", *standard_errors])
 
     if include_model_stats:
         table_rows.extend([
-            ["自身盈余公告控制", *_table2_specification_setting(model_rows, "own")],
-            ["其他控制变量", *_table2_specification_setting(model_rows, "other")],
-            ["交易日期固定效应", *_table2_specification_setting(model_rows, "date")],
-            [
-                "被提示公司×年度季度固定效应",
-                *_table2_specification_setting(model_rows, "firm_quarter"),
-            ],
-            [
-                "样本量",
-                *[
+            {
+                "kind": "stat",
+                "label": "自身盈余公告控制",
+                "values": _table2_specification_setting(model_rows, "own"),
+                "line_before": True,
+            },
+            {
+                "kind": "stat",
+                "label": "其他控制变量",
+                "values": _table2_specification_setting(model_rows, "other"),
+            },
+            {
+                "kind": "stat",
+                "label": "日期固定效应",
+                "values": _table2_specification_setting(model_rows, "date"),
+            },
+            {
+                "kind": "stat",
+                "label": "被提示公司×年度季度固定效应",
+                "values": _table2_specification_setting(model_rows, "firm_quarter"),
+            },
+            {
+                "kind": "stat",
+                "label": "样本量",
+                "values": [
                     f"{int(_numeric_value(row['回归样本量'])):,}"
                     for row in model_rows
                 ],
-            ],
-            [
-                "R²",
-                *[
+            },
+            {
+                "kind": "stat",
+                "label": r"$R^2$",
+                "values": [
                     f"{_numeric_value(row['R方']):.4f}"
                     for row in model_rows
                 ],
-            ],
+            },
         ])
 
-    figure, axes = plt.subplots(figsize=(16.5, 11.7))
+    notes = (
+        [
+            "注：空白单元格表示相应规格未纳入该控制变量；括号内为按被提示公司和交易日期双向聚类的标准误。",
+            "*、**、*** 分别表示在 10%、5% 和 1% 水平上显著。",
+        ]
+        if include_model_stats
+        else ["续见下一页。"]
+    )
+    row_heights = {
+        "coefficient": 0.88,
+        "standard_error": 0.76,
+        "stat": 0.88,
+    }
+    body_fontsize = 8.5
+    title_height = 3.55
+    header_height = 2.78
+    notes_height = 0.85 * len(notes) + 0.75
+    body_height = sum(row_heights[row["kind"]] for row in table_rows)
+    total_height = title_height + header_height + body_height + notes_height
+
+    figure, axes = plt.subplots(
+        figsize=(297.0 / 25.4, 210.0 / 25.4),
+        dpi=254,
+    )
+    figure.subplots_adjust(left=0.02, right=0.985, top=0.97, bottom=0.03)
     figure.patch.set_facecolor("white")
+    axes.set_facecolor("white")
+    axes.set_xlim(0, 1)
+    axes.set_ylim(total_height, 0)
     axes.axis("off")
+
+    # 两个收益窗口各占六列，组间留白与参考表一致。
+    data_left = 0.205 + 0.012
+    data_right = 0.975
+    group_boundaries = {end for _, end, _ in group_headers[:-1]}
+    group_gap = 0.018
+    available_width = data_right - data_left - group_gap * len(group_boundaries)
+    column_width = available_width / len(column_labels)
+    column_lefts = []
+    column_rights = []
+    column_centers = []
+    cursor = data_left
+    for index in range(len(column_labels)):
+        left = cursor
+        right = left + column_width
+        column_lefts.append(left)
+        column_rights.append(right)
+        column_centers.append((left + right) / 2)
+        cursor = right + (group_gap if index in group_boundaries else 0.0)
+
+    def draw_rule(y, linewidth=0.8):
+        axes.plot(
+            [0.02, 0.985],
+            [y, y],
+            color="#222222",
+            linewidth=linewidth,
+            solid_capstyle="butt",
+            clip_on=False,
+        )
+
     title = "表 2（续）" if continued else "表 2"
     axes.text(
-        0.01,
-        0.975,
+        0.02,
+        0.18,
         title,
         ha="left",
         va="top",
-        fontsize=16,
+        fontsize=11.5,
         fontproperties=FONT_BOLD,
     )
     axes.text(
-        0.01,
-        0.935,
+        0.02,
+        0.92,
         "线索事件与被提示公司收益",
         ha="left",
         va="top",
-        fontsize=13,
+        fontsize=14.5,
         fontproperties=FONT_BOLD,
     )
     axes.text(
-        0.01,
-        0.902,
-        (
-            f"{sample_label}；因变量为被提示公司的特征调整收益率；"
-            "系数与括号内双向聚类标准误的单位均为百分点"
-        ),
+        0.02,
+        2.12,
+        sample_label,
         ha="left",
         va="top",
-        fontsize=8.2,
+        fontsize=9.1,
         color="#444444",
         fontproperties=FONT,
     )
 
-    table = axes.table(
-        cellText=table_rows,
-        colLabels=column_labels,
-        cellLoc="center",
-        colLoc="center",
-        colWidths=[0.24] + [0.76 / 12] * 12,
-        bbox=[0.01, 0.115, 0.98, 0.745],
-    )
-    table.auto_set_font_size(False)
-    table.set_fontsize(5.8)
-    for (row_number, column_number), cell in table.get_celld().items():
-        cell.set_edgecolor("#9AA3AA")
-        cell.set_linewidth(0.28)
-        cell.set_facecolor("#F4F6F7" if row_number == 0 else "white")
-        cell.get_text().set_fontproperties(
-            FONT_BOLD
-            if row_number == 0 or (row_number - 1) in bold_row_numbers
-            else FONT
-        )
-        if column_number == 0:
-            cell.get_text().set_ha("left")
-
-    notes = (
-        "注：空白单元格表示该规格未纳入相应控制变量。"
-        if include_model_stats
-        else "续见下一页。"
+    header_top = title_height
+    draw_rule(header_top, linewidth=1.0)
+    axes.text(
+        0.046,
+        header_top + 1.55,
+        "变量",
+        ha="left",
+        va="center",
+        fontproperties=FONT_BOLD,
+        fontsize=body_fontsize + 0.4,
     )
     axes.text(
-        0.01,
-        0.07,
-        notes,
-        ha="left",
-        va="top",
-        fontsize=7.2,
-        color="#444444",
+        (column_centers[0] + column_centers[-1]) / 2,
+        header_top + 0.42,
+        "因变量：被提示公司的特征调整收益率（%）",
+        ha="center",
+        va="center",
+        color="#333333",
         fontproperties=FONT,
+        fontsize=max(8.0, body_fontsize - 0.1),
     )
-    if include_model_stats:
+    for start, end, label in group_headers:
         axes.text(
-            0.01,
-            0.042,
-            "*、**、*** 分别表示在 10%、5% 和 1% 水平上显著。",
+            (column_centers[start] + column_centers[end]) / 2,
+            header_top + 1.18,
+            label,
+            ha="center",
+            va="center",
+            fontproperties=FONT_BOLD,
+            fontsize=body_fontsize + 0.15,
+        )
+        axes.plot(
+            [
+                column_lefts[start] + 0.08 * column_width,
+                column_rights[end] - 0.08 * column_width,
+            ],
+            [header_top + 1.62, header_top + 1.62],
+            color="#555555",
+            linewidth=0.5,
+            solid_capstyle="butt",
+            clip_on=False,
+        )
+    for center, label in zip(column_centers, column_labels):
+        axes.text(
+            center,
+            header_top + 2.16,
+            label,
+            ha="center",
+            va="center",
+            fontproperties=FONT_BOLD,
+            fontsize=max(7.5, body_fontsize - 0.45),
+        )
+
+    body_top = header_top + header_height
+    draw_rule(body_top, linewidth=0.9)
+    y = body_top
+    for row in table_rows:
+        kind = row["kind"]
+        height = row_heights[kind]
+        if row.get("line_before"):
+            draw_rule(y, linewidth=0.55)
+
+        center_y = y + height / 2
+        font = FONT_BOLD if row.get("bold", False) else FONT
+        color = row.get("color", "#111111")
+        label_x = 0.046 if kind != "standard_error" else 0.058
+        axes.text(
+            label_x,
+            center_y,
+            row["label"],
+            ha="left",
+            va="center",
+            color=color,
+            fontproperties=font,
+            fontsize=body_fontsize,
+        )
+        for center, value in zip(column_centers, row["values"]):
+            axes.text(
+                center,
+                center_y,
+                value,
+                ha="center",
+                va="center",
+                color=color,
+                fontproperties=font,
+                fontsize=body_fontsize,
+            )
+        y += height
+
+    draw_rule(y, linewidth=1.0)
+    note_y = y + 0.72
+    for note in notes:
+        axes.text(
+            0.02,
+            note_y,
+            note,
             ha="left",
             va="top",
-            fontsize=7.2,
             color="#444444",
             fontproperties=FONT,
+            fontsize=max(8.0, body_fontsize - 0.5),
         )
+        note_y += 0.82
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(
         output_path,
         dpi=300,
-        bbox_inches="tight",
         facecolor="white",
-        pad_inches=0.08,
     )
     plt.close(figure)
 

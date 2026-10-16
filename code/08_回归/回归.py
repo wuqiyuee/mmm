@@ -57,12 +57,12 @@ TABLE3_COEFFICIENTS_PATH = (
 
 APPENDIX_A2_RESULTS_PATH = (
     ROOT / "中间结果/08_回归结果/"
-    "附表A2_成交笔数订单失衡结果.csv"
+    "附表A2_OIBnum_买卖次数订单失衡结果.csv"
 )
 
 APPENDIX_A2_COEFFICIENTS_PATH = (
     ROOT / "中间结果/08_回归结果/"
-    "附表A2_系数明细.csv"
+    "附表A2_OIBnum_买卖次数订单失衡系数明细.csv"
 )
 
 TABLE3_RESULTS_PATH.parent.mkdir(
@@ -1144,7 +1144,7 @@ table3_oib_raw_cols = [
     "OIBvol_avg_t_tp1",
     "OIBvol_avg_t_tp10",
 
-    # 附表A.2：成交笔数口径
+    # 附表A.2：小单买卖次数口径
     "OIBnum_avg_t_tp1",
     "OIBnum_avg_t_tp10",
 ]
@@ -1307,8 +1307,11 @@ print(
 # “表3_散户订单失衡_加入日期固定效应.py”单独估计并保存。
 
 # -----------------------------------------------------------------
-# 6. 附表A.2：成交笔数口径订单失衡
+# 6. 附表A.2：小单买卖次数订单失衡（基准规格）
 # -----------------------------------------------------------------
+# 本节吸收被提示公司×年度季度固定效应，按被提示公司和交易日期双向聚类。
+# 三种订单失衡口径并加入交易日期固定效应的本项目扩展由
+# “附表A2-A4_三种订单失衡指标.py”单独估计并保存。
 
 appendix_a2_outcomes = [
     (
@@ -1332,7 +1335,9 @@ for outcome, window_label in appendix_a2_outcomes:
 
     model_metadata = {
         "结果表": "附表A.2",
-        "衡量口径": "成交笔数",
+        "订单失衡指标": "OIBnum",
+        "衡量口径": "买卖次数",
+        "分析口径": "基准规格",
         "订单失衡窗口": window_label,
         "散户识别方法": "A股小单口径",
     }
@@ -1370,7 +1375,7 @@ appendix_a2_coefficients.to_csv(
     encoding="utf-8-sig",
 )
 
-print("\n附表A.2：成交笔数订单失衡结果")
+print("\n附表A.2：小单买卖次数订单失衡结果（基准规格）")
 print(appendix_a2_results.to_string(index=False))
 print(
     f"\n附表A.2结果已保存："

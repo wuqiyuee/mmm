@@ -450,9 +450,45 @@ def read_base_panel(path: Path) -> pd.DataFrame:
     return data
 
 
+class DailyOutcomeLookup:
+    """一次建立公司×交易日索引，供所有相对日复用。"""
+
+    def __init__(self, daily_lookup: pd.DataFrame) -> None:
+        require_columns(
+            daily_lookup,
+            [
+                "StkcdRecall",
+                OUTCOME_TD_COL,
+                OUTCOME_DATE_COL,
+                OUTCOME_VALUE_COL,
+            ],
+            "单日收益查找表",
+        )
+        key_index = pd.MultiIndex.from_frame(
+            daily_lookup[["StkcdRecall", OUTCOME_TD_COL]]
+        )
+        if not key_index.is_unique:
+            raise pd.errors.MergeError("单日收益查找表的公司和交易日序号不唯一。")
+
+        self._values = daily_lookup[
+            [OUTCOME_TD_COL, OUTCOME_DATE_COL, OUTCOME_VALUE_COL]
+        ].copy(deep=False)
+        self._values.index = key_index
+
+    def match(self, base: pd.DataFrame, horizon: int) -> pd.DataFrame:
+        """精确定位目标市场交易日；未匹配的目标日保留缺失。"""
+        target_index = pd.MultiIndex.from_arrays(
+            [base["StkcdRecall"], base["td"] + int(horizon)],
+            names=["StkcdRecall", OUTCOME_TD_COL],
+        )
+        if not target_index.is_unique:
+            raise pd.errors.MergeError("回归基础面板的公司和交易日序号不唯一。")
+        return self._values.reindex(target_index).reset_index(drop=True)
+
+
 def attach_daily_outcome(
     base: pd.DataFrame,
-    daily_lookup: pd.DataFrame,
+    daily_lookup: pd.DataFrame | DailyOutcomeLookup,
     horizon: int,
 ) -> pd.DataFrame:
     """按 StkcdRecall 和 td+h 精确匹配一个相对日的单日收益。"""
@@ -466,38 +502,20 @@ def attach_daily_outcome(
         ["StkcdRecall", "td"],
         "回归基础面板",
     )
-    require_columns(
-        daily_lookup,
-        [
-            "StkcdRecall",
-            OUTCOME_TD_COL,
-            OUTCOME_DATE_COL,
-            OUTCOME_VALUE_COL,
-        ],
-        "单日收益查找表",
+    lookup = (
+        daily_lookup
+        if isinstance(daily_lookup, DailyOutcomeLookup)
+        else DailyOutcomeLookup(daily_lookup)
     )
+    matched_values = lookup.match(base, int(horizon))
 
-    aligned = base.copy()
-    aligned[TARGET_TD_COL] = aligned["td"] + int(horizon)
-    aligned = aligned.merge(
-        daily_lookup,
-        left_on=["StkcdRecall", TARGET_TD_COL],
-        right_on=["StkcdRecall", OUTCOME_TD_COL],
-        how="left",
-        validate="1:1",
-    )
-
-    if len(aligned) != len(base):
-        raise ValueError("匹配单日收益后基础面板行数发生变化。")
-
-    matched = aligned[OUTCOME_TD_COL].notna()
-    if not aligned.loc[
-        matched,
-        OUTCOME_TD_COL,
-    ].eq(aligned.loc[matched, TARGET_TD_COL]).all():
-        raise ValueError("目标交易日序号匹配错误。")
-
-    return aligned.drop(columns=[TARGET_TD_COL])
+    # 右端变量和起点日期均不随窗口改变。只新增三列目标日数据，
+    # 共享基础表的只读列，避免每轮复制整张控制变量宽表。
+    aligned = base.copy(deep=False)
+    aligned.index = pd.RangeIndex(len(base))
+    for column in matched_values.columns:
+        aligned[column] = matched_values[column].array
+    return aligned
 
 
 def build_common_sample_mask(
@@ -916,6 +934,7 @@ def main() -> None:
         if horizon not in completed
     ]
     rows = existing_rows.copy()
+    outcome_lookup = DailyOutcomeLookup(daily_lookup) if pending else None
 
     for position, horizon in enumerate(pending, start=1):
         print(
@@ -924,7 +943,7 @@ def main() -> None:
         )
         aligned = attach_daily_outcome(
             base,
-            daily_lookup,
+            outcome_lookup,
             horizon,
         )
         valid_outcome = aligned[OUTCOME_VALUE_COL].notna()

@@ -14,13 +14,21 @@ from __future__ import annotations
 
 import argparse
 import gc
+import sys
 from pathlib import Path
 
 import matplotlib
 import numpy as np
 import pandas as pd
-from pyhdfe import create as create_hdfe
 from scipy import stats
+
+
+# 公共回归模块位于当前“图3”目录的上一级。
+MODULE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(MODULE_DIR))
+from 图2图3扩展_日期固定效应回归公共模块 import (
+    residualize_regression_data as residualize_regression_data_shared,
+)
 
 
 matplotlib.use("Agg")
@@ -28,7 +36,7 @@ import matplotlib.pyplot as plt
 from matplotlib import font_manager
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
 PATTERN_PATH = (
     ROOT
@@ -41,7 +49,7 @@ OIB_PATH = (
     ROOT
     / "中间结果"
     / "02_变量构造结果"
-    / "交易行为OIB、Avol"
+    / "2交易行为OIB、Avol"
     / "OIB_CSMAR_prep.csv"
 )
 
@@ -77,13 +85,13 @@ OWN_EA_COLS = (
 )
 
 DISCLOSURE_COLS = [
-    "ownMajorDisclosure",
-    "ownPerformanceForecast",
+    "ownOtherEventER",
+    "ownPerformanceForecastBrief",
 ]
 
 MEDIA_COLS = [
-    "positiveNews",
-    "negativeNews",
+    "aesIncrease",
+    "aesDecrease",
     "logIncreaseAEV",
     "logDecreaseAEV",
 ]
@@ -311,80 +319,15 @@ def residualize_regression_data(
     outcome: str,
     fe_ids: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """
-    分列吸收两组固定效应。
-
-    固定效应变换对各列是线性的，因此分批残差化与一次处理全部列
-    使用同一模型；分批方式可显著降低千万行样本的峰值内存。
-    """
-    algorithm = create_hdfe(
+    """调用公共季度直接解，并保留本脚本因变量的二维列向量结构。"""
+    y_residualized, x_residualized = residualize_regression_data_shared(
+        reg,
+        outcome,
+        RHS_COLS,
         fe_ids,
-        drop_singletons=False,
-        compute_degrees=False,
-        residualize_method="map",
-        options={
-            "tol": 1e-8,
-            "transform": "symmetric",
-            "acceleration": "cg",
-        },
+        batch_size=RESIDUALIZATION_BATCH_SIZE,
     )
-
-    all_columns = [outcome] + RHS_COLS
-    y_residualized = np.empty(
-        (len(reg), 1),
-        dtype=np.float64,
-    )
-    x_residualized = np.empty(
-        (len(reg), len(RHS_COLS)),
-        dtype=np.float64,
-    )
-
-    for start in range(
-        0,
-        len(all_columns),
-        RESIDUALIZATION_BATCH_SIZE,
-    ):
-        stop = min(
-            start + RESIDUALIZATION_BATCH_SIZE,
-            len(all_columns),
-        )
-        columns = all_columns[start:stop]
-        values = reg[columns].to_numpy(
-            dtype=np.float64,
-            copy=True,
-        )
-        residualized = algorithm.residualize(
-            values
-        )
-
-        if start == 0:
-            y_residualized[:, 0] = (
-                residualized[:, 0]
-            )
-            rhs_stop = stop - 1
-            if rhs_stop > 0:
-                x_residualized[
-                    :,
-                    0:rhs_stop,
-                ] = residualized[:, 1:]
-        else:
-            rhs_start = start - 1
-            rhs_stop = stop - 1
-            x_residualized[
-                :,
-                rhs_start:rhs_stop,
-            ] = residualized
-
-        del values, residualized
-        gc.collect()
-
-    del algorithm
-    gc.collect()
-
-    return (
-        y_residualized,
-        x_residualized,
-    )
+    return y_residualized.reshape(-1, 1), x_residualized
 
 
 def read_figure3_panel() -> pd.DataFrame:
@@ -654,6 +597,9 @@ def run_date_fe_regression(
             xpx,
             xpy,
         ).reshape(-1)
+
+        xpx_inverse = np.linalg.inv(xpx)
+
         coefficient_solver = (
             "正规方程（条件数已检查）"
         )
@@ -663,11 +609,12 @@ def run_date_fe_regression(
             y_residualized,
             rcond=None,
         )[0].reshape(-1)
+
+        xpx_inverse = np.linalg.pinv(xpx)
+
         coefficient_solver = (
             "最小二乘分解"
         )
-
-    xpx_inverse = np.linalg.inv(xpx)
 
     residuals = (
         y_residualized.reshape(-1)
@@ -981,12 +928,28 @@ def draw_figure3_date_fe(
             ],
         )
 
+    # 按10%显著性水平判断：90%置信区间不包含0
+    significant = (
+        np.abs(coefficients)
+        > 1.6448536269514722 * standard_errors
+    )
+    point_colors = np.where(significant, "#d62728", "#1a1a1a")
+
     axis.scatter(
         x_values,
         coefficients,
-        color="#1a1a1a",
+        color=point_colors,
         s=16,
         zorder=4,
+    )
+
+    # 添加红点图例
+    axis.scatter(
+        [],
+        [],
+        color="#d62728",
+        s=16,
+        label="红点：10%水平显著",
     )
 
     axis.axhline(
@@ -1000,7 +963,7 @@ def draw_figure3_date_fe(
         "（控制交易日期固定效应）"
     )
     axis.set_xlabel("事件窗口")
-    axis.set_ylabel("订单不平衡（百分点）")
+    axis.set_ylabel("提示变量系数（百分点）")
 
     ticks = [
         1,

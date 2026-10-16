@@ -32,8 +32,12 @@ TABLE3_DATE_FE_SUMMARY_PATH = (
 TABLE3_DATE_FE_DETAIL_PATH = (
     RESULT_DIR / "表3_散户订单失衡_加入日期固定效应系数明细.csv"
 )
-APPENDIX_A2_SUMMARY_PATH = RESULT_DIR / "附表A2_成交笔数订单失衡结果.csv"
-APPENDIX_A2_DETAIL_PATH = RESULT_DIR / "附表A2_系数明细.csv"
+APPENDIX_A2_SUMMARY_PATH = (
+    RESULT_DIR / "附表A2_OIBnum_买卖次数订单失衡结果.csv"
+)
+APPENDIX_A2_DETAIL_PATH = (
+    RESULT_DIR / "附表A2_OIBnum_买卖次数订单失衡系数明细.csv"
+)
 TABLE4_RESULTS_PATH = RESULT_DIR / "表4_规模异质性结果.csv"
 TABLE4_DATE_FE_RESULTS_PATH = (
     RESULT_DIR / "表4_规模异质性_加入日期固定效应结果.csv"
@@ -57,7 +61,62 @@ TABLE3_FULL_OUTPUT = OUTPUT_DIR / "table3_散户订单失衡_完整系数版.png
 TABLE3_DATE_FE_FULL_OUTPUT = (
     OUTPUT_DIR / "table3_散户订单失衡_完整系数版_加入日期固定效应.png"
 )
-APPENDIX_A2_FULL_OUTPUT = OUTPUT_DIR / "appendix_A2_成交笔数订单失衡_完整系数版.png"
+APPENDIX_A2_FULL_OUTPUT = (
+    OUTPUT_DIR / "appendix_A2_OIBnum_买卖次数订单失衡_完整系数版.png"
+)
+APPENDIX_DATE_FE_SPECS = [
+    {
+        "table_number": "A.2",
+        "prefix": "OIBnum",
+        "measure_label": "买卖次数",
+        "summary_path": (
+            RESULT_DIR
+            / "附表A2_OIBnum_买卖次数订单失衡_加入日期固定效应结果.csv"
+        ),
+        "detail_path": (
+            RESULT_DIR
+            / "附表A2_OIBnum_买卖次数订单失衡_加入日期固定效应系数明细.csv"
+        ),
+        "image_path": (
+            OUTPUT_DIR
+            / "appendix_A2_OIBnum_买卖次数订单失衡_完整系数版_加入日期固定效应.png"
+        ),
+    },
+    {
+        "table_number": "A.3",
+        "prefix": "OIBamount",
+        "measure_label": "成交金额",
+        "summary_path": (
+            RESULT_DIR
+            / "附表A3_OIBamount_成交金额订单失衡_加入日期固定效应结果.csv"
+        ),
+        "detail_path": (
+            RESULT_DIR
+            / "附表A3_OIBamount_成交金额订单失衡_加入日期固定效应系数明细.csv"
+        ),
+        "image_path": (
+            OUTPUT_DIR
+            / "appendix_A3_OIBamount_成交金额订单失衡_完整系数版_加入日期固定效应.png"
+        ),
+    },
+    {
+        "table_number": "A.4",
+        "prefix": "OIBorder",
+        "measure_label": "成交笔数",
+        "summary_path": (
+            RESULT_DIR
+            / "附表A4_OIBorder_成交笔数订单失衡_加入日期固定效应结果.csv"
+        ),
+        "detail_path": (
+            RESULT_DIR
+            / "附表A4_OIBorder_成交笔数订单失衡_加入日期固定效应系数明细.csv"
+        ),
+        "image_path": (
+            OUTPUT_DIR
+            / "appendix_A4_OIBorder_成交笔数订单失衡_完整系数版_加入日期固定效应.png"
+        ),
+    },
+]
 TABLE4_EXTENSION_OUTPUT = OUTPUT_DIR / "table4_规模异质性_t_tp1扩展分析.png"
 TABLE4_DATE_FE_EXTENSION_OUTPUT = (
     OUTPUT_DIR / "table4_规模异质性_t_tp1扩展分析_加入日期固定效应.png"
@@ -130,8 +189,8 @@ def variable_label(variable: str) -> str:
     fixed_labels = {
         "quarterLag1size90plus": "线索事件",
         "ownEA": "自身盈余公告 [t]",
-        "ownMajorDisclosure": "其他专题事件 [t]",
-        "ownPerformanceForecast": "业绩预告或快报 [t]",
+        "ownOtherEventER": "其他专题事件 [t]",
+        "ownPerformanceForecastBrief": "业绩预告或快报 [t]",
         "aesIncrease": "被提示公司新闻情绪上升 [t]",
         "aesDecrease": "被提示公司新闻情绪下降 [t]",
         "logIncreaseAEV": "log(1 + 新闻量增加)",
@@ -155,7 +214,7 @@ def read_result(path: Path, required: Sequence[str]) -> pd.DataFrame:
     """读取一个结果文件，并给出清晰的缺失文件或字段提示。"""
     if not path.exists():
         raise FileNotFoundError(
-            f"找不到回归结果文件：{path}\n请先运行“回归.py”生成结果。"
+            f"找不到回归结果文件：{path}\n请先运行生成该结果的回归脚本。"
         )
     frame = pd.read_csv(path)
     validate_columns(frame, required, path.name)
@@ -894,6 +953,95 @@ def order_imbalance_models(summary: pd.DataFrame) -> list[pd.Series]:
     return ordered
 
 
+def read_appendix_order_imbalance_results(
+    summary_path: Path,
+    detail_path: Path,
+    *,
+    prefix: str,
+    measure_label: str,
+    date_fixed_effects: str,
+    table_number: str | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """读取附表结果，防止混用不同指标、窗口或固定效应的历史文件。"""
+    metadata_columns = [
+        "衡量口径",
+        "订单失衡窗口",
+        "散户识别方法",
+        "因变量",
+        "单位",
+        "日期固定效应",
+        "被提示公司×年度季度固定效应",
+    ]
+    if table_number is not None:
+        metadata_columns.append("附表编号")
+    summary = read_result(
+        summary_path,
+        metadata_columns
+        + [
+            "线索系数",
+            "聚类标准误",
+            "p值",
+            "控制变量",
+            "回归样本量",
+            "R方",
+        ],
+    )
+    details = read_result(
+        detail_path,
+        metadata_columns
+        + ["变量", "变量顺序", "系数", "聚类标准误", "p值"],
+    )
+    expected_metadata = {
+        "衡量口径": measure_label,
+        "散户识别方法": "A股小单口径",
+        "单位": "百分点",
+        "日期固定效应": date_fixed_effects,
+        "被提示公司×年度季度固定效应": "是",
+    }
+    if table_number is not None:
+        expected_metadata["附表编号"] = table_number
+    expected_outcomes = {
+        "[t, t+1]": f"{prefix}_avg_t_tp1_w",
+        "[t, t+10]": f"{prefix}_avg_t_tp10_w",
+    }
+    for frame, source_path in [(summary, summary_path), (details, detail_path)]:
+        if frame.empty:
+            raise ValueError(f"{source_path.name}没有可绘制的附表结果。")
+        for column, expected in expected_metadata.items():
+            values = frame[column].astype("string").str.strip()
+            if values.isna().any() or not values.eq(expected).all():
+                raise ValueError(
+                    f"{source_path.name}的“{column}”必须全部为“{expected}”。"
+                )
+        if set(frame["订单失衡窗口"].dropna()) != set(WINDOW_ORDER):
+            raise ValueError(
+                f"{source_path.name}应且仅应包含两个窗口：{WINDOW_ORDER}。"
+            )
+        expected = frame["订单失衡窗口"].map(expected_outcomes)
+        if expected.isna().any() or not frame["因变量"].eq(expected).all():
+            raise ValueError(
+                f"{source_path.name}的因变量与{measure_label}指标及窗口不一致。"
+            )
+    order_imbalance_models(summary)
+    if len(summary) != len(WINDOW_ORDER):
+        raise ValueError(f"{summary_path.name}的模型汇总应恰好有两行。")
+    if details[["变量", "变量顺序"]].isna().any().any():
+        raise ValueError(f"{detail_path.name}的变量名称或顺序存在缺失。")
+    if details.duplicated(["订单失衡窗口", "变量"]).any():
+        raise ValueError(f"{detail_path.name}存在重复的“订单失衡窗口×变量”。")
+    variable_orders = details[["变量", "变量顺序"]].drop_duplicates()
+    if variable_orders.duplicated("变量").any() or variable_orders.duplicated(
+        "变量顺序"
+    ).any():
+        raise ValueError(f"{detail_path.name}的变量与变量顺序不是一一对应。")
+    expected_variables = set(variable_orders["变量"])
+    for window in WINDOW_ORDER:
+        actual_variables = set(details.loc[details["订单失衡窗口"].eq(window), "变量"])
+        if actual_variables != expected_variables:
+            raise ValueError(f"{detail_path.name}的{window}窗口缺少系数明细行。")
+    return summary, details
+
+
 def draw_order_imbalance_full(
     summary: pd.DataFrame,
     details: pd.DataFrame,
@@ -902,8 +1050,9 @@ def draw_order_imbalance_full(
     title: str,
     output_path: Path,
     label_right: float = 0.54,
+    additional_notes: Sequence[str] = (),
 ) -> None:
-    """绘制表3或附表A.2的两列完整系数表。"""
+    """绘制表3或附表A.2-A.4的两列完整系数表。"""
     model_rows = order_imbalance_models(summary)
     lookup = {
         (row["订单失衡窗口"], row["变量"]): row
@@ -1000,6 +1149,7 @@ def draw_order_imbalance_full(
         column_labels=WINDOW_ORDER,
         rows=rows,
         notes=[
+            *additional_notes,
             "注：括号内为按被提示公司和交易日期双向聚类的标准误。",
             "*、**、*** 分别表示在 10%、5% 和 1% 水平上显著。",
         ],
@@ -1291,33 +1441,24 @@ def main() -> None:
             "“日期固定效应”全部为“是”；"
             f"实际取值为：{sorted(date_fe_values)}。"
         )
-    appendix_summary = read_result(
+    appendix_summary, appendix_details = read_appendix_order_imbalance_results(
         APPENDIX_A2_SUMMARY_PATH,
-        [
-            "衡量口径",
-            "订单失衡窗口",
-            "散户识别方法",
-            "线索系数",
-            "聚类标准误",
-            "p值",
-            "控制变量",
-            "日期固定效应",
-            "被提示公司×年度季度固定效应",
-            "回归样本量",
-            "R方",
-        ],
-    )
-    appendix_details = read_result(
         APPENDIX_A2_DETAIL_PATH,
-        [
-            "订单失衡窗口",
-            "变量",
-            "变量顺序",
-            "系数",
-            "聚类标准误",
-            "p值",
-        ],
+        prefix="OIBnum",
+        measure_label="买卖次数",
+        date_fixed_effects="否",
     )
+    appendix_date_fe_results = []
+    for metric_spec in APPENDIX_DATE_FE_SPECS:
+        summary, details = read_appendix_order_imbalance_results(
+            metric_spec["summary_path"],
+            metric_spec["detail_path"],
+            prefix=metric_spec["prefix"],
+            measure_label=metric_spec["measure_label"],
+            date_fixed_effects="是",
+            table_number=metric_spec["table_number"],
+        )
+        appendix_date_fe_results.append((metric_spec, summary, details))
     table4_results = read_result(
         TABLE4_RESULTS_PATH,
         [
@@ -1391,10 +1532,28 @@ def main() -> None:
         appendix_summary,
         appendix_details,
         table_number="附表 A.2",
-        title="线索事件与散户订单失衡：成交笔数口径",
+        title="线索事件与小单买卖次数订单失衡",
         output_path=APPENDIX_A2_FULL_OUTPUT,
         label_right=0.34,
+        additional_notes=[
+            "本表为买卖次数口径的基准结果，吸收被提示公司×年度季度固定效应。",
+        ],
     )
+    for metric_spec, summary, details in appendix_date_fe_results:
+        draw_order_imbalance_full(
+            summary,
+            details,
+            table_number=(
+                f"附表 {metric_spec['table_number']}"
+                "（本项目扩展：加入日期固定效应）"
+            ),
+            title=f"线索事件与小单{metric_spec['measure_label']}订单失衡",
+            output_path=metric_spec["image_path"],
+            label_right=0.34,
+            additional_notes=[
+                "本表为本项目扩展结果，同时吸收被提示公司×年度季度和交易日期固定效应。",
+            ],
+        )
     draw_table4_extension(table4_results, TABLE4_EXTENSION_OUTPUT)
     draw_table4_extension(
         table4_date_fe_results,
@@ -1413,6 +1572,7 @@ def main() -> None:
         TABLE3_FULL_OUTPUT,
         TABLE3_DATE_FE_FULL_OUTPUT,
         APPENDIX_A2_FULL_OUTPUT,
+        *[spec["image_path"] for spec in APPENDIX_DATE_FE_SPECS],
         TABLE4_EXTENSION_OUTPUT,
         TABLE4_DATE_FE_EXTENSION_OUTPUT,
     ]:
