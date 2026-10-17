@@ -50,7 +50,7 @@ OUTPUT_RESULTS_RELATIVE_PATH = Path(
 OUTPUT_COEFFICIENTS_RELATIVE_PATH = Path(
     "中间结果/08_回归结果/表2_111_110系数明细.csv"
 )
-IMAGE_RELATIVE_DIR = Path("图表结果/论文复现/表格")
+IMAGE_RELATIVE_DIR = Path("图表结果/论文复现/表格/03_扩展分析/提示事件比较")
 
 FONT_PATH = Path("/System/Library/Fonts/Supplemental/Songti.ttc")
 if FONT_PATH.exists():
@@ -62,9 +62,9 @@ else:
 
 plt.rcParams["axes.unicode_minus"] = False
 
-# 如需限定研究期，在这里填写年份；不限制则保持 None。
-START_YEAR: int | None = None
-END_YEAR: int | None = None
+# 默认研究期：2005—2025年（含首尾年）。
+START_YEAR: int | None = 2005
+END_YEAR: int | None = 2025
 
 
 OWN_EA_COLS = (

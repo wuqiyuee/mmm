@@ -76,7 +76,14 @@ RESULT_DIR = (
     / "扩展分析"
     / "单日散户订单不平衡"
 )
-IMAGE_DIR = ROOT / "图表结果" / "论文复现" / "表格"
+IMAGE_DIR = (
+    ROOT
+    / "图表结果"
+    / "论文复现"
+    / "表格"
+    / "03_扩展分析"
+    / "单日散户订单失衡"
+)
 
 FONT_PATH = Path("/System/Library/Fonts/Supplemental/Songti.ttc")
 if FONT_PATH.exists():
@@ -91,6 +98,8 @@ plt.rcParams["axes.unicode_minus"] = False
 
 DEFAULT_HORIZONS = (0, 1, 10)
 WINSOR_TAIL = 0.01
+START_YEAR = 2005
+END_YEAR = 2025
 
 CUE_COL = "quarterLag1size90plus"
 
@@ -312,6 +321,10 @@ def read_base_panel(
 
     if data[["StkcdRecall", "Trddt", "yearQuarter"]].isna().any().any():
         raise ValueError("回归基础面板的公司、日期或年度季度存在缺失。")
+
+    data = data.loc[
+        data["Trddt"].dt.year.between(START_YEAR, END_YEAR)
+    ].copy()
 
     duplicate_count = int(
         data.duplicated(["StkcdRecall", "td"]).sum()

@@ -38,7 +38,16 @@ FULL_PATH = (
 RESULT_DIR = ROOT / "中间结果" / "08_回归结果"
 TABLE2_RESULTS_PATH = RESULT_DIR / "表2_模型汇总.csv"
 TABLE2_COEFFICIENTS_PATH = RESULT_DIR / "表2_系数明细.csv"
-IMAGE_DIR = ROOT / "图表结果" / "论文复现" / "表格"
+# 独立脚本图片先归入待核对目录，数值核对后再与正式主表归并。
+IMAGE_DIR = (
+    ROOT
+    / "图表结果"
+    / "论文复现"
+    / "表格"
+    / "99_待核对与归档"
+    / "独立脚本待核对"
+    / "表2_收益回归"
+)
 TABLE2_IMAGE_PATHS = {
     "pattern": (
         IMAGE_DIR / "table2_收益回归_完整系数版_模式公司主样本_独立脚本.png",
@@ -65,9 +74,9 @@ plt.rcParams["axes.unicode_minus"] = False
 # 样本期和变量设置
 # =============================================================================
 
-# 如需限定研究期，在这里填写年份；不限制则保持 None。
-START_YEAR = None
-END_YEAR = None
+# 默认研究期：2005—2025年（含首尾年）。
+START_YEAR = 2005
+END_YEAR = 2025
 
 OWN_EA_COLS = (
     [f"ownEA_tm{i}" for i in range(10, 0, -1)]

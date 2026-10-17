@@ -55,11 +55,18 @@ OIB_PATH = (
 )
 
 RESULT_DIR = ROOT / "中间结果" / "08_回归结果"
-IMAGE_DIR = ROOT / "图表结果" / "论文复现" / "表格"
+IMAGE_DIR = (
+    ROOT
+    / "图表结果"
+    / "论文复现"
+    / "表格"
+    / "02_附表"
+    / "加入日期固定效应"
+)
 
 
-START_YEAR = None
-END_YEAR = None
+START_YEAR = 2005
+END_YEAR = 2025
 
 CUE_COL = "quarterLag1size90plus"
 

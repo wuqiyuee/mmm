@@ -58,6 +58,9 @@ TABLE3_DATE_FE_IMAGE_PATH = (
     / "图表结果"
     / "论文复现"
     / "表格"
+    / "99_待核对与归档"
+    / "独立脚本待核对"
+    / "表3_散户订单失衡"
     / "table3_散户订单失衡_完整系数版_加入日期固定效应_独立脚本.png"
 )
 
@@ -72,8 +75,8 @@ else:
 plt.rcParams["axes.unicode_minus"] = False
 
 
-START_YEAR = None
-END_YEAR = None
+START_YEAR = 2005
+END_YEAR = 2025
 
 CUE_COL = "quarterLag1size90plus"
 

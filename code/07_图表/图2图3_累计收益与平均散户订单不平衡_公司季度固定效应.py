@@ -235,6 +235,8 @@ def draw_dynamic_figure(table, title, output_path):
 
 # True：读取完整结果表重画；False：执行后面的回归流程
 PLOT_ONLY = True
+START_YEAR = 2005
+END_YEAR = 2025
 
 if PLOT_ONLY:
     plot_jobs = [
@@ -313,6 +315,10 @@ if missing:
 
 print("正在读取模式公司样本数据......")
 df = pd.read_csv(pattern_sample_PATH, usecols=usecols)
+df["Trddt"] = pd.to_datetime(df["Trddt"], errors="raise")
+df = df.loc[
+    df["Trddt"].dt.year.between(START_YEAR, END_YEAR)
+].copy()
 print("模式公司数据读取成功！")
 
 # ============================================================

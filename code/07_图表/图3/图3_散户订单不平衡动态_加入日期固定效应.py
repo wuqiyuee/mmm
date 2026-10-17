@@ -105,6 +105,8 @@ CONTROL_COLS = (
 RHS_COLS = [CUE_COL] + CONTROL_COLS
 
 HORIZONS = list(range(1, 51))
+START_YEAR = 2005
+END_YEAR = 2025
 
 # 双侧显著性水平与置信区间的对应关系：
 # 1%、5%、10% 显著性水平分别对应 99%、95%、90% 置信区间。
@@ -357,7 +359,6 @@ def read_figure3_panel() -> pd.DataFrame:
         dtype=panel_dtype,
         parse_dates=["Trddt"],
     )
-
     data["StkcdRecall"] = (
         data["StkcdRecall"]
         .str.strip()
@@ -370,6 +371,10 @@ def read_figure3_panel() -> pd.DataFrame:
         raise ValueError(
             "图3主样本的被提示公司和交易日期不是唯一键。"
         )
+
+    data = data.loc[
+        data["Trddt"].dt.year.between(START_YEAR, END_YEAR)
+    ].copy()
 
     # 这两个分组在所有窗口中定义相同，预先编号可避免50次重复
     # groupby/factorize；窗口筛选只会删除行，不会改变组的归属。

@@ -48,6 +48,9 @@ TABLE4_DATE_FE_IMAGE_PATH = (
     / "图表结果"
     / "论文复现"
     / "表格"
+    / "99_待核对与归档"
+    / "独立脚本待核对"
+    / "表4_规模异质性"
     / "table4_规模异质性_加入日期固定效应_独立脚本.png"
 )
 
@@ -62,8 +65,8 @@ else:
 plt.rcParams["axes.unicode_minus"] = False
 
 
-START_YEAR = None
-END_YEAR = None
+START_YEAR = 2005
+END_YEAR = 2025
 
 TABLE4_OUTCOME = "chAdjreturn_t_tp1_Recall_w"
 

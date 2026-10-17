@@ -11,7 +11,9 @@
 未在本地指南中公开，因此本脚本将采用的规则明确写入命令行输出，而不宣称
 与官方聚合表逐行完全一致。未匹配情感的新闻会保留在 ``Allnews_All``，并
 单独计入 ``Unclassifiednews_All``；由于现有 AES/AEV 脚本不使用该字段，正式
-运行前应查看分段匹配率，必要时用 ``--max-unclassified-rate`` 设置失败阈值。
+运行前应查看分段已分类新闻率，必要时用 ``--max-unclassified-rate`` 设置失败阈值。
+日期筛选、质量阈值及最终新闻篇数摘要均采用所选输出日期范围；正式结果仅在
+全部分段成功后替换，临时文件在项目 work（临时工作目录）内自动清理。
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from dataclasses import dataclass
 import io
 from pathlib import Path
 import re
+import tempfile
 from typing import Iterable, Iterator, Sequence
 import zipfile
 
@@ -57,6 +60,20 @@ RELATION_COLUMNS = [
     "is_ment_in_content",
 ]
 SENTIMENT_BASE_COLUMNS = ["news_id", "pub_date"]
+DOCUMENTATION_WORKBOOKS = {"《报刊新闻量化舆情数据库》字段说明.xlsx"}
+OUTPUT_COLUMNS = [
+    "Scode",
+    "Coname",
+    "Date",
+    "Newsnum_Title",
+    "Newsnum_Cont",
+    "Posnews_All",
+    "Neunews_All",
+    "Negnews_All",
+    "Unclassifiednews_All",
+    "Allnews_All",
+    "year",
+]
 SEGMENT_PATTERN = re.compile(
     r"[（(](?P<start>\d{4}-\d{2}-\d{2})[~～](?P<end>\d{4}-\d{2}-\d{2})[）)]\.zip$"
 )
@@ -83,8 +100,11 @@ def normalize_stock_codes(values: pd.Series) -> pd.Series:
     return extracted.str.zfill(6)
 
 
-def normalize_dates(values: pd.Series) -> pd.Series:
-    """把日期或带时分秒的发布日期归一到自然日。"""
+def normalize_dates(
+    values: pd.Series,
+    field_name: str = "发布日期",
+) -> pd.Series:
+    """把发布日期归一到自然日；缺失或无法解析的日期直接报错。"""
 
     # DATAGO 文件中可能同时出现 YYYY-MM-DD 和带时分秒的日期；
     # format="mixed" 避免 pandas 按首行格式解析后误删另一种格式。
@@ -92,7 +112,33 @@ def normalize_dates(values: pd.Series) -> pd.Series:
         parsed = pd.to_datetime(values, errors="coerce", format="mixed")
     except TypeError:  # 兼容较旧 pandas 版本
         parsed = pd.to_datetime(values, errors="coerce")
+    invalid = parsed.isna()
+    if invalid.any():
+        examples = values.loc[invalid].head(3).tolist()
+        raise ValueError(
+            f"{field_name} 存在 {int(invalid.sum())} 条缺失或无法解析的日期，"
+            f"原值示例: {examples}"
+        )
     return parsed.dt.normalize()
+
+
+def parse_output_date_range(
+    start_date: str | pd.Timestamp | None,
+    end_date: str | pd.Timestamp | None,
+) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+    """解析输出日期边界，拒绝缺失日期及倒置的日期范围。"""
+
+    start = pd.Timestamp(start_date) if start_date is not None else None
+    end = pd.Timestamp(end_date) if end_date is not None else None
+    if (start is not None and pd.isna(start)) or (
+        end is not None and pd.isna(end)
+    ):
+        raise ValueError("输出起止日期不能是缺失日期")
+    start = start.normalize() if start is not None else None
+    end = end.normalize() if end is not None else None
+    if start is not None and end is not None and end < start:
+        raise ValueError("输出结束日期不能早于开始日期")
+    return start, end
 
 
 def classify_sentiment(
@@ -139,12 +185,12 @@ def prepare_sentiment(
 
     out = sentiment[required].copy()
     out["news_id"] = out["news_id"].astype("string").str.strip()
-    out["pub_date"] = normalize_dates(out["pub_date"])
+    out["pub_date"] = normalize_dates(out["pub_date"], "情感表发布日期")
     out[score_column] = pd.to_numeric(out[score_column], errors="coerce")
     out[score_column] = out[score_column].where(
         np.isfinite(out[score_column])
     )
-    out = out.dropna(subset=["news_id", "pub_date"])
+    out = out.dropna(subset=["news_id"])
 
     key = ["news_id", "pub_date"]
     grouped = out.groupby(key, dropna=False)[score_column].agg(
@@ -182,9 +228,9 @@ def prepare_relations(relations: pd.DataFrame) -> pd.DataFrame:
 
     out = relations[RELATION_COLUMNS].copy()
     out["news_id"] = out["news_id"].astype("string").str.strip()
-    out["pub_date"] = normalize_dates(out["pub_date"])
+    out["pub_date"] = normalize_dates(out["pub_date"], "关系表发布日期")
     out["stkcd"] = normalize_stock_codes(out["stkcd"])
-    out = out.dropna(subset=["news_id", "pub_date", "stkcd"])
+    out = out.dropna(subset=["news_id", "stkcd"])
 
     for column in ["is_ment_in_title", "is_ment_in_content"]:
         numeric = pd.to_numeric(out[column], errors="coerce").fillna(0)
@@ -212,15 +258,29 @@ def aggregate_daily_news(
     sentiment: pd.DataFrame,
     score_column: str = DEFAULT_SCORE_COLUMN,
     neutral_band: float = 0.0,
+    start_date: str | pd.Timestamp | None = None,
+    end_date: str | pd.Timestamp | None = None,
 ) -> pd.DataFrame:
-    """将一段新闻明细聚合为公司-自然日统计表。"""
+    """聚合所选日期的公司日统计，附带同范围的独立新闻篇数摘要。"""
 
+    start, end = parse_output_date_range(start_date, end_date)
     rel = prepare_relations(relations)
     sent = prepare_sentiment(
         sentiment,
         score_column=score_column,
         neutral_band=neutral_band,
     )
+
+    # 在关联和文章级摘要之前筛选，避免把范围外新闻计入输出摘要。
+    if start is not None:
+        rel = rel.loc[rel["pub_date"] >= start]
+    if end is not None:
+        rel = rel.loc[rel["pub_date"] <= end]
+    if rel.empty:
+        result = pd.DataFrame(columns=OUTPUT_COLUMNS)
+        result.attrs["sentiment_total_articles"] = 0
+        result.attrs["sentiment_unclassified_articles"] = 0
+        return result
 
     merged = rel.merge(
         sent[["news_id", "pub_date", "sentiment_class"]],
@@ -280,27 +340,14 @@ def aggregate_daily_news(
     article_status = merged[
         ["news_id", "pub_date", "sentiment_class"]
     ].drop_duplicates()
-    grouped.attrs["sentiment_total_articles"] = int(len(article_status))
-    grouped.attrs["sentiment_unclassified_articles"] = int(
-        article_status["sentiment_class"].eq("unclassified").sum()
-    )
-
-    output_columns = [
-        "Scode",
-        "Coname",
-        "Date",
-        "Newsnum_Title",
-        "Newsnum_Cont",
-        "Posnews_All",
-        "Neunews_All",
-        "Negnews_All",
-        "Unclassifiednews_All",
-        "Allnews_All",
-        "year",
-    ]
-    return grouped[output_columns].sort_values(["Scode", "Date"]).reset_index(
+    result = grouped[OUTPUT_COLUMNS].sort_values(["Scode", "Date"]).reset_index(
         drop=True
     )
+    result.attrs["sentiment_total_articles"] = int(len(article_status))
+    result.attrs["sentiment_unclassified_articles"] = int(
+        article_status["sentiment_class"].eq("unclassified").sum()
+    )
+    return result
 
 
 def parse_segment_range(path: Path) -> tuple[pd.Timestamp, pd.Timestamp] | None:
@@ -379,15 +426,17 @@ def validate_segment_dates(
 ) -> None:
     """确认压缩包内部的发布日期没有越过文件名声明的日期段。"""
 
-    dates = normalize_dates(table["pub_date"])
-    outside = dates.notna() & ((dates < pair.start) | (dates > pair.end))
+    archive_name = (
+        pair.relation_path.name
+        if table_name == "关系表"
+        else pair.sentiment_path.name
+    )
+    dates = normalize_dates(
+        table["pub_date"], f"{table_name} {archive_name} 的发布日期"
+    )
+    outside = (dates < pair.start) | (dates > pair.end)
     if outside.any():
         examples = dates.loc[outside].head(3).dt.strftime("%Y-%m-%d").tolist()
-        archive_name = (
-            pair.relation_path.name
-            if table_name == "关系表"
-            else pair.sentiment_path.name
-        )
         raise ValueError(
             f"{table_name} {archive_name} 含有超出声明日期段的记录，"
             f"示例: {examples}"
@@ -398,20 +447,28 @@ def iter_excel_members(
     archive_path: Path,
     required_columns: Sequence[str],
 ) -> Iterator[pd.DataFrame]:
-    """从压缩包中逐个读取包含指定字段的数据工作簿，跳过说明文件。"""
+    """只跳过已知说明工作簿；任何数据分片读取失败或缺列均报错。"""
 
     with zipfile.ZipFile(archive_path) as archive:
         for member in archive.infolist():
             if not member.filename.lower().endswith(".xlsx"):
                 continue
-            payload = archive.read(member)
+            if Path(member.filename).name in DOCUMENTATION_WORKBOOKS:
+                continue
             try:
+                payload = archive.read(member)
                 header = pd.read_excel(io.BytesIO(payload), nrows=0)
-            except Exception:
-                continue
-            if not set(required_columns).issubset(header.columns):
-                continue
-            yield pd.read_excel(io.BytesIO(payload), usecols=list(required_columns))
+                missing = set(required_columns).difference(header.columns)
+                if missing:
+                    raise _required_columns_error("数据分片", missing)
+                frame = pd.read_excel(
+                    io.BytesIO(payload), usecols=list(required_columns)
+                )
+            except Exception as error:
+                raise ValueError(
+                    f"读取数据分片失败: {archive_path} / {member.filename}: {error}"
+                ) from error
+            yield frame
 
 
 def read_segment_table(
@@ -438,96 +495,115 @@ def aggregate_segment_archives(
     end_date: str | None = None,
     max_unclassified_rate: float | None = None,
 ) -> dict[str, int | float]:
-    """按分段聚合并流式写出最终日度表。"""
+    """按所选日期分段聚合，成功后原子替换正式结果并返回同范围摘要。
+
+    新闻篇数按新闻编号与自然日去重，不累加公司日篇数。
+    分段数分别报告输入、实际处理及产生输出的分段数量。
+    """
 
     pairs = pair_segment_archives(relation_dir, sentiment_dir)
-    start = pd.Timestamp(start_date).normalize() if start_date else None
-    end = pd.Timestamp(end_date).normalize() if end_date else None
-    if start is not None and end is not None and end < start:
-        raise ValueError("end_date 不能早于 start_date")
+    start, end = parse_output_date_range(start_date, end_date)
     if max_unclassified_rate is not None and not (
         np.isfinite(max_unclassified_rate)
         and 0 <= max_unclassified_rate <= 1
     ):
         raise ValueError("max_unclassified_rate 必须在 [0, 1] 内")
 
+    selected_pairs = [
+        pair
+        for pair in pairs
+        if (start is None or pair.end >= start)
+        and (end is None or pair.start <= end)
+    ]
+    if not selected_pairs:
+        raise ValueError("输出日期范围与输入分段没有交集")
+
+    output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    first = True
+    work_dir = ROOT / "work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    if work_dir.stat().st_dev != output_path.parent.stat().st_dev:
+        raise ValueError(
+            "正式输出与项目临时工作目录不在同一文件系统，无法原子替换；"
+            "请将输出设置在项目所在文件系统。"
+        )
+
     total_rows = 0
     total_articles = 0
     total_unclassified = 0
+    output_segments = 0
 
-    for pair in pairs:
-        sentiment = read_segment_table(
-            pair.sentiment_path,
-            [*SENTIMENT_BASE_COLUMNS, score_column],
-        )
-        relations = read_segment_table(pair.relation_path, RELATION_COLUMNS)
-        validate_segment_dates(sentiment, pair, "情感表")
-        validate_segment_dates(relations, pair, "关系表")
-        daily = aggregate_daily_news(
-            relations,
-            sentiment,
-            score_column=score_column,
-            neutral_band=neutral_band,
-        )
-
-        segment_articles = int(daily.attrs["sentiment_total_articles"])
-        segment_unclassified = int(
-            daily.attrs["sentiment_unclassified_articles"]
-        )
-        segment_rate = (
-            segment_unclassified / segment_articles
-            if segment_articles
-            else 0.0
-        )
-        print(
-            f"{pair.start.date()}~{pair.end.date()}: "
-            f"情感匹配率={1 - segment_rate:.4%}; "
-            f"未分类新闻率={segment_rate:.4%}"
-        )
-        if (
-            max_unclassified_rate is not None
-            and segment_rate > max_unclassified_rate
-        ):
-            raise ValueError(
-                f"{pair.start.date()}~{pair.end.date()} 的未分类新闻率 "
-                f"{segment_rate:.4%} 超过阈值 "
-                f"{max_unclassified_rate:.4%}"
+    # 临时结果始终位于项目临时工作目录；异常退出时自动清理。
+    with tempfile.TemporaryDirectory(prefix="datago_news_", dir=work_dir) as temp_dir:
+        pending_output = Path(temp_dir) / output_path.name
+        for pair in selected_pairs:
+            sentiment = read_segment_table(
+                pair.sentiment_path,
+                [*SENTIMENT_BASE_COLUMNS, score_column],
             )
-        total_articles += segment_articles
-        total_unclassified += segment_unclassified
+            relations = read_segment_table(pair.relation_path, RELATION_COLUMNS)
+            validate_segment_dates(sentiment, pair, "情感表")
+            validate_segment_dates(relations, pair, "关系表")
+            daily = aggregate_daily_news(
+                relations,
+                sentiment,
+                score_column=score_column,
+                neutral_band=neutral_band,
+                start_date=start,
+                end_date=end,
+            )
+            if daily.empty:
+                continue
 
-        if start is not None:
-            daily = daily[daily["Date"] >= start]
-        if end is not None:
-            daily = daily[daily["Date"] <= end]
-        if daily.empty:
-            continue
+            segment_articles = int(daily.attrs["sentiment_total_articles"])
+            segment_unclassified = int(
+                daily.attrs["sentiment_unclassified_articles"]
+            )
+            segment_rate = segment_unclassified / segment_articles
+            print(
+                f"{pair.start.date()}~{pair.end.date()}（所选输出日期内）: "
+                f"独立新闻篇数={segment_articles}; "
+                f"已分类新闻率={1 - segment_rate:.4%}; "
+                f"未分类新闻率={segment_rate:.4%}"
+            )
+            if (
+                max_unclassified_rate is not None
+                and segment_rate > max_unclassified_rate
+            ):
+                raise ValueError(
+                    f"{pair.start.date()}~{pair.end.date()} 所选输出日期内的"
+                    f"未分类新闻率 {segment_rate:.4%} 超过阈值 "
+                    f"{max_unclassified_rate:.4%}"
+                )
 
-        daily.to_csv(
-            output_path,
-            mode="w" if first else "a",
-            header=first,
-            index=False,
-            encoding="utf-8-sig" if first else "utf-8",
-            date_format="%Y-%m-%d",
-        )
-        first = False
-        total_rows += len(daily)
-        total_unclassified += int(daily["Unclassifiednews_All"].sum())
+            first = output_segments == 0
+            daily.to_csv(
+                pending_output,
+                mode="w" if first else "a",
+                header=first,
+                index=False,
+                encoding="utf-8-sig" if first else "utf-8",
+                date_format="%Y-%m-%d",
+            )
+            output_segments += 1
+            total_rows += len(daily)
+            total_articles += segment_articles
+            total_unclassified += segment_unclassified
 
-    if first:
-        raise ValueError("筛选后没有可写出的新闻记录")
-    return {
-        "segment_count": len(pairs),
-        "output_rows": total_rows,
-        "total_news_articles": total_articles,
-        "unclassified_news_articles": total_unclassified,
-        "unclassified_rate": (
-            total_unclassified / total_articles if total_articles else 0.0
-        ),
-    }
+        if output_segments == 0:
+            raise ValueError("筛选后没有可写出的新闻记录")
+        summary = {
+            "input_segment_count": len(pairs),
+            "processed_segment_count": len(selected_pairs),
+            "segment_count": output_segments,
+            "output_rows": total_rows,
+            "total_news_articles": total_articles,
+            "unclassified_news_articles": total_unclassified,
+            "unclassified_rate": total_unclassified / total_articles,
+        }
+        # 同一文件系统内替换；此前的任何失败都不会覆盖原正式结果。
+        pending_output.replace(output_path)
+    return summary
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -561,7 +637,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-unclassified-rate",
         type=float,
         default=None,
-        help="可选；某分段未分类新闻率超过该值时中止，范围[0,1]",
+        help="可选；某分段在所选输出日期内的未分类新闻率超限时中止，范围[0,1]",
     )
     parser.add_argument(
         "--check-only",
@@ -574,7 +650,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     pairs = pair_segment_archives(args.relation_dir, args.sentiment_dir)
-    print(f"将使用 {len(pairs)} 个报刊分段，已排除 fullpacked_data 全期包")
+    print(f"发现 {len(pairs)} 个报刊输入分段，已排除 fullpacked_data 全期包")
     for pair in pairs:
         print(
             f"{pair.start.date()}~{pair.end.date()}: "

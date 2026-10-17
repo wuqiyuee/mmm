@@ -43,26 +43,40 @@ TABLE4_DATE_FE_RESULTS_PATH = (
     RESULT_DIR / "表4_规模异质性_加入日期固定效应结果.csv"
 )
 
-TABLE2_COMPACT_OUTPUT = OUTPUT_DIR / "table2_收益回归_紧凑版.png"
+TABLE2_COMPACT_OUTPUT = (
+    OUTPUT_DIR / "01_正文表" / "表2_收益回归" / "table2_收益回归_紧凑版.png"
+)
 TABLE2_PATTERN_FULL_OUTPUT = (
-    OUTPUT_DIR / "table2_收益回归_完整系数版_模式公司主样本.png"
+    OUTPUT_DIR / "01_正文表" / "表2_收益回归"
+    / "table2_收益回归_完整系数版_模式公司主样本.png"
 )
 TABLE2_PATTERN_FULL_CONTINUED_OUTPUT = (
-    OUTPUT_DIR / "table2_收益回归_完整系数版_模式公司主样本_续页.png"
+    OUTPUT_DIR / "01_正文表" / "表2_收益回归"
+    / "table2_收益回归_完整系数版_模式公司主样本_续页.png"
 )
 TABLE2_PATTERN_FULL_PDF_OUTPUT = (
-    OUTPUT_DIR / "table2_收益回归_完整系数版_模式公司主样本.pdf"
+    OUTPUT_DIR / "01_正文表" / "表2_收益回归"
+    / "table2_收益回归_完整系数版_模式公司主样本.pdf"
 )
-TABLE2_ALL_FULL_OUTPUT = OUTPUT_DIR / "table2_收益回归_完整系数版_完整样本.png"
+TABLE2_ALL_FULL_OUTPUT = (
+    OUTPUT_DIR / "03_扩展分析" / "完整样本" / "表2_收益回归"
+    / "table2_收益回归_完整系数版_完整样本.png"
+)
 TABLE2_ALL_FULL_CONTINUED_OUTPUT = (
-    OUTPUT_DIR / "table2_收益回归_完整系数版_完整样本_续页.png"
+    OUTPUT_DIR / "03_扩展分析" / "完整样本" / "表2_收益回归"
+    / "table2_收益回归_完整系数版_完整样本_续页.png"
 )
-TABLE3_FULL_OUTPUT = OUTPUT_DIR / "table3_散户订单失衡_完整系数版.png"
+TABLE3_FULL_OUTPUT = (
+    OUTPUT_DIR / "01_正文表" / "表3_散户订单失衡"
+    / "table3_散户订单失衡_完整系数版.png"
+)
 TABLE3_DATE_FE_FULL_OUTPUT = (
-    OUTPUT_DIR / "table3_散户订单失衡_完整系数版_加入日期固定效应.png"
+    OUTPUT_DIR / "03_扩展分析" / "加入日期固定效应" / "表3_散户订单失衡"
+    / "table3_散户订单失衡_完整系数版_加入日期固定效应.png"
 )
 APPENDIX_A2_FULL_OUTPUT = (
-    OUTPUT_DIR / "appendix_A2_OIBnum_买卖次数订单失衡_完整系数版.png"
+    OUTPUT_DIR / "02_附表" / "基准结果"
+    / "appendix_A2_OIBnum_买卖次数订单失衡_完整系数版.png"
 )
 APPENDIX_DATE_FE_SPECS = [
     {
@@ -78,7 +92,7 @@ APPENDIX_DATE_FE_SPECS = [
             / "附表A2_OIBnum_买卖次数订单失衡_加入日期固定效应系数明细.csv"
         ),
         "image_path": (
-            OUTPUT_DIR
+            OUTPUT_DIR / "02_附表" / "加入日期固定效应"
             / "appendix_A2_OIBnum_买卖次数订单失衡_完整系数版_加入日期固定效应.png"
         ),
     },
@@ -95,7 +109,7 @@ APPENDIX_DATE_FE_SPECS = [
             / "附表A3_OIBamount_成交金额订单失衡_加入日期固定效应系数明细.csv"
         ),
         "image_path": (
-            OUTPUT_DIR
+            OUTPUT_DIR / "02_附表" / "加入日期固定效应"
             / "appendix_A3_OIBamount_成交金额订单失衡_完整系数版_加入日期固定效应.png"
         ),
     },
@@ -112,14 +126,18 @@ APPENDIX_DATE_FE_SPECS = [
             / "附表A4_OIBorder_成交笔数订单失衡_加入日期固定效应系数明细.csv"
         ),
         "image_path": (
-            OUTPUT_DIR
+            OUTPUT_DIR / "02_附表" / "加入日期固定效应"
             / "appendix_A4_OIBorder_成交笔数订单失衡_完整系数版_加入日期固定效应.png"
         ),
     },
 ]
-TABLE4_EXTENSION_OUTPUT = OUTPUT_DIR / "table4_规模异质性_t_tp1扩展分析.png"
+TABLE4_EXTENSION_OUTPUT = (
+    OUTPUT_DIR / "03_扩展分析" / "收益窗口" / "表4_规模异质性"
+    / "table4_规模异质性_t_tp1扩展分析.png"
+)
 TABLE4_DATE_FE_EXTENSION_OUTPUT = (
-    OUTPUT_DIR / "table4_规模异质性_t_tp1扩展分析_加入日期固定效应.png"
+    OUTPUT_DIR / "03_扩展分析" / "加入日期固定效应" / "表4_规模异质性"
+    / "table4_规模异质性_t_tp1扩展分析_加入日期固定效应.png"
 )
 
 WINDOW_ORDER = ["[t, t+1]", "[t, t+10]"]

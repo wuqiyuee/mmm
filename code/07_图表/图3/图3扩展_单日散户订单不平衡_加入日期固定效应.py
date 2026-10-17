@@ -129,6 +129,8 @@ BASE_KEY_COLS = [
 ]
 
 HORIZONS = list(range(0, 51))
+START_YEAR = 2005
+END_YEAR = 2025
 WINSOR_TAIL = 0.01
 
 # 双侧显著性水平与置信区间的对应关系：
@@ -470,6 +472,10 @@ def read_base_panel(
     data["td"] = _coerce_required_integer(data["td"], "td")
     if data[["StkcdRecall", "Trddt"]].isna().any().any():
         raise ValueError("回归基础面板存在缺失的公司代码或事件起点日期。")
+
+    data = data.loc[
+        data["Trddt"].dt.year.between(START_YEAR, END_YEAR)
+    ].copy()
 
     duplicate_count = data.duplicated(["StkcdRecall", "td"]).sum()
     if duplicate_count:
