@@ -3005,7 +3005,7 @@ def main(
         root / "中间结果/03_记忆矩阵/分析师共同覆盖_参考文献后"
     )
 
-        # 第一阶段：读取记忆矩阵，并合并提示公司市值。
+    # 第一阶段：读取记忆矩阵，并合并提示公司市值。
     mm = load_pattern_matrix_with_marketcap(
         matrix_path=paths["MemoryMatrixPattern_path"],
         daily_panel_path=paths["TRD_Dalyr_DGTW_path"],
@@ -3052,7 +3052,7 @@ def main(
         mm_key=mm_key,
     )
 
-        # 第二阶段：构造提示变量，并聚合到被提示公司事件日。
+    # 第二阶段：构造提示变量，并聚合到被提示公司事件日。
     mm = add_size_groups_and_basic_cues(
         mm=mm,
     )
