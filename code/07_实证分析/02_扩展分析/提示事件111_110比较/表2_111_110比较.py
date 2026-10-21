@@ -181,7 +181,7 @@ def find_project_root(start: Path | None = None) -> Path:
 
 
 def significance_stars(p_value: float) -> str:
-    """按论文常用阈值添加显著性星号。"""
+    """按阈值添加显著性星号。"""
     if pd.isna(p_value):
         return ""
     if p_value < 0.01:
