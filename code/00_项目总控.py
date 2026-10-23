@@ -328,9 +328,10 @@ def build_tasks() -> dict[str, Task]:
             key="pattern_firm_qtr",
             name="识别公司—财报季度模式",
             stage="02 变量构造",
-            script="code/02_构建变量/主回归/6识别pattern_firms/build_pattern_firm_qtr.py",
+            script="code/02_构建变量/主回归/2识别pattern_firms/build_pattern_firm_qtr.py",
             inputs=(
                 "input/CSMAR/年、中、季报基本情况文件1990-12-31至2026-06-30/IAR_Rept.csv",
+                "input/CSMAR/公司文件(1990-12-10至2026-08-21)/TRD_Co.csv",
                 "input/CSMAR/日历文件(1990-12-19至2026-08-20)/CER_Cale.csv",
             ),
             outputs=(
@@ -364,13 +365,13 @@ def build_tasks() -> dict[str, Task]:
                 "中间结果/02_变量构造结果/7TopMover/TopMover1_top100.csv",
                 "中间结果/02_变量构造结果/7TopMover/TopMover1_top10pct.csv",
             ),
-            note="下游尚未确定采用前100名还是前10%口径。",
+            note="同时输出前100名和前10%两种口径；当前模式公司记忆矩阵读取前100名口径。",
         ),
         Task(
             key="market_cap_groups",
             name="构造月度市值分组和断点",
             stage="02 变量构造",
-            script="code/02_构建变量/主回归/8月度市值分组.py",
+            script="code/02_构建变量/主回归/月度市值分组.py",
             inputs=(
                 "input/CSMAR/月个股回报率文件2000-01至2025-12/TRD_Mnth.csv",
             ),
@@ -385,7 +386,7 @@ def build_tasks() -> dict[str, Task]:
             key="pattern_memory",
             name="构造模式公司记忆矩阵",
             stage="03 记忆矩阵",
-            script="code/03_记忆矩阵/pattern_firms记忆矩阵/只含pattern_firms（封装版）.py",
+            script="code/03_记忆矩阵&心理机制变量分组/pattern_firms记忆矩阵/只含pattern_firms（手动确认）.py",
             deps=(
                 "clean_samples",
                 "pattern_firm_qtr",
@@ -395,38 +396,33 @@ def build_tasks() -> dict[str, Task]:
                 "top_mover_ranked",
             ),
             inputs=(
+                "input/CSMAR/年、中、季报基本情况文件1990-12-31至2026-06-30/IAR_Rept.csv",
                 "中间结果/02_变量构造结果/6PatternFirmQtr/PatternFirmQtr.csv",
                 "中间结果/02_变量构造结果/3报刊新闻_AES_AEV/报刊新闻_AES_AEV.csv",
                 "中间结果/02_变量构造结果/2交易行为OIB、Avol/Avol_CSMAR_prep.csv",
                 "中间结果/02_变量构造结果/4sue/sue.csv",
+                "中间结果/02_变量构造结果/7TopMover/TopMover1_top100.csv",
                 "中间结果/01_清洗后样本/市场交易日历_td.csv",
             ),
             outputs=(
                 "中间结果/03_记忆矩阵/MemoryMatrixPattern(交易变量用公告后首个交易日).csv",
             ),
-            status=TaskStatus.BLOCKED,
-            note=(
-                "该脚本仍读取无编号的旧目录，并从 OIB 表读取已拆分到 Avol 表的字段；"
-                "同时仍引用 TopMover1.csv，而当前排名脚本输出两种口径。"
-            ),
+            args=("--root", "{root}"),
+            note="使用当前手动确认版，异常成交量读取独立表，极端涨跌股票沿用前100名口径。",
         ),
         Task(
             key="full_memory",
             name="构造全样本记忆矩阵",
             stage="03 记忆矩阵",
-            script="code/03_记忆矩阵/full_sample记忆矩阵/Full（封装优化版）.py",
+            script="code/03_记忆矩阵&心理机制变量分组/full_sample记忆矩阵/Full（封装优化版）.py",
             inputs=(
-                "input/CSMAR/年、中、季报基本情况文件2000-01-01至2025-12-31/IAR_Rept.csv",
+                "input/CSMAR/年、中、季报基本情况文件1990-12-31至2026-06-30/IAR_Rept.csv",
+                "input/CSMAR/公司文件(1990-12-10至2026-08-21)/TRD_Co.csv",
             ),
             outputs=(
                 "中间结果/03_记忆矩阵/MemoryMatrixFull(封装优化版).csv",
             ),
             args=("--root", "{root}"),
-            status=TaskStatus.BLOCKED,
-            note=(
-                "该脚本读取年、中、季报基本情况文件2000-01-01至2025-12-31，"
-                "项目现有正式原始表位于1990-12-31至2026-06-30目录。"
-            ),
         ),
         Task(
             key="analyst_overlap_pattern",
@@ -475,17 +471,12 @@ def build_tasks() -> dict[str, Task]:
                 "--id-modes",
                 "split",
             ),
-            status=TaskStatus.BLOCKED,
-            note=(
-                "共同覆盖脚本固定读取 MemoryMatrixFull.csv，"
-                "当前生产版输出为 MemoryMatrixFull(封装优化版).csv。"
-            ),
         ),
         Task(
             key="memory_111_110",
             name="构造 111 与 110 两类记忆矩阵",
             stage="03 记忆矩阵",
-            script="code/03_记忆矩阵/full_sample记忆矩阵/构造111_110记忆矩阵.py",
+            script="code/03_记忆矩阵&心理机制变量分组/full_sample记忆矩阵/构造111_110记忆矩阵.py",
             deps=("pattern_firm_qtr",),
             inputs=(
                 "input/CSMAR/年、中、季报基本情况文件1990-12-31至2026-06-30/IAR_Rept.csv",

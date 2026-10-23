@@ -117,11 +117,13 @@ def _matches(sorted_keys: np.ndarray, candidates: np.ndarray) -> np.ndarray:
 
 
 def _read_pairs(paths: dict, chunk_size: int, audit: dict) -> pd.DataFrame:
-    columns = PAIR_KEYS + ["event_Trddt", "event_td", "quarterLag1Alt", "nrFirmsAnnLag1Alt"] + HISTORY_COLS
+    columns = PAIR_KEYS + ["event_Trddt", "event_td", "quarterLag1Alt", "nrFirmsAnnLag1Alt",
+                           "currentAccpersLag1", "lag1AnnualAnchor", "lag1Q1Anchor"] + HISTORY_COLS
     pieces, scanned = [], 0
     for chunk in pd.read_csv(
         paths["MemoryMatrixPattern_path"], usecols=columns,
-        dtype={"Stkcd": "string", "StkcdRecall": "string"},
+        dtype={"Stkcd": "string", "StkcdRecall": "string", "currentAccpersLag1": "string",
+               "lag1AnnualAnchor": "int8", "lag1Q1Anchor": "int8"},
         parse_dates=["Annodt", "event_Trddt"], chunksize=chunk_size,
     ):
         scanned += len(chunk)
@@ -235,11 +237,15 @@ def _build_events(merge, paths: dict, chunk_size: int, audit: dict) -> pd.DataFr
     audit["供应链过滤后公司对数"] = len(eligible)
     eligible = merge.filter_analyst_overlap_pairs(
         eligible, ROOT / "中间结果/03_记忆矩阵/分析师共同覆盖_参考文献后", "split", 365, True,
+        matrix_path=paths["MemoryMatrixPattern_path"],
+        forecast_path=paths["analyst_forecast_path"],
     )
     pairs = merge.apply_pair_filters(pairs, eligible)
     audit["三轮过滤后公司对数"] = len(pairs)
     if pairs.empty:
         raise ValueError("关联排除后没有有效公司对。")
+    pairs = merge.deduplicate_pattern_event_pairs(pairs)
+    audit["交易日去重后公司对数"] = len(pairs)
 
     cap = pairs["mktcap_tm3"]
     p10, p50, p90, p95 = [pairs[f"marketCap_{p}th_percentile"] for p in (10, 50, 90, 95)]
@@ -297,7 +303,7 @@ def _fingerprint(paths: dict) -> dict:
     sources = [
         paths[key] for key in (
             "MemoryMatrixPattern_path", "TRD_Dalyr_DGTW_path", "marketcap_group_path",
-            "industry_path", "SC_NetWorkRelationsIndex_path", "output_path",
+            "industry_path", "SC_NetWorkRelationsIndex_path", "analyst_forecast_path", "output_path",
         )
     ] + [
         ROOT / "中间结果/03_记忆矩阵/分析师共同覆盖_参考文献后/拆开AnanmID/Pattern样本_分析师共同覆盖_滚动365天.csv",

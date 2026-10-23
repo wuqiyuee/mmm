@@ -1,3 +1,6 @@
+# 保留同日全部模式报告，逐报告判断季度距离，再汇总唯一公司对。
+# 当前公告独立于历史同日配对；滞后一期至四期仅使用此前364天的共同公告。
+# 滞后零期单独表示当期共同公告，继续供替代线索分析使用。
 # 将公告自然日映射至事件交易日：
 # 交易日公告保留当天，非交易日公告顺延到下一个交易日。
 
@@ -274,7 +277,7 @@ def add_event_trading_date(
 
 
 def read_base_data(paths: Dict[str, Path]) -> pd.DataFrame:
-    """读取公告数据，并筛选 PatternFirmQtr 等于 1 的样本。"""
+    """保留报告明细，并按每份报告自身的财报期筛选模式资格。"""
     IAR_Rept = pd.read_csv(
         paths["IAR_Rept"],
         encoding="utf-8",
@@ -285,6 +288,8 @@ def read_base_data(paths: Dict[str, Path]) -> pd.DataFrame:
     IAR_Rept["Stkcd"] = (
         IAR_Rept["Stkcd"].apply(normalize_stock_code)
     )
+    IAR_Rept = IAR_Rept.dropna(subset=["Accper", "Annodt"])
+    IAR_Rept = IAR_Rept.loc[IAR_Rept["Stkcd"].ne("")].copy()
 
     # 公告日等于财报截止日是未披露占位值，不参与公告配对。
     n_undisclosed = int(IAR_Rept["Annodt"].eq(IAR_Rept["Accper"]).sum())
@@ -293,34 +298,15 @@ def read_base_data(paths: Dict[str, Path]) -> pd.DataFrame:
         IAR_Rept["Annodt"].ne(IAR_Rept["Accper"])
     ].copy()
 
-    # 同一公司同一公告日存在多个财报期时，保留较晚的财报期。
-    rows_before_dedup = len(IAR_Rept)
-
-    duplicate_company_day = IAR_Rept.duplicated(
-        ["Stkcd", "Annodt"],
-        keep=False,
-    )
-
+    # 只消除完全相同的报告记录；同日年报和一季报均保留。
     IAR_Rept = (
-        IAR_Rept
-        .sort_values(
-            ["Stkcd", "Annodt", "Accper"],
-            kind="stable",
-        )
-        .drop_duplicates(
-            ["Stkcd", "Annodt"],
-            keep="last",
-        )
+        IAR_Rept.drop_duplicates(["Stkcd", "Annodt", "Accper"])
+        .sort_values(["Stkcd", "Annodt", "Accper"], kind="stable")
         .reset_index(drop=True)
     )
-
     print(
-        "同公司同公告日重复记录数：",
-        int(duplicate_company_day.sum()),
-    )
-    print(
-        "按原文口径删除记录数：",
-        rows_before_dedup - len(IAR_Rept),
+        "同公司同公告日多报告涉及的公司日数：",
+        int(IAR_Rept.groupby(["Stkcd", "Annodt"]).size().gt(1).sum()),
     )
 
 
@@ -333,13 +319,15 @@ def read_base_data(paths: Dict[str, Path]) -> pd.DataFrame:
     pattern_firm_qtr["Stkcd"] = (
         pattern_firm_qtr["Stkcd"].apply(normalize_stock_code)
     )
+    if pattern_firm_qtr.duplicated(["Stkcd", "Accper"]).any():
+        raise ValueError("模式资格表在公司和财报截止日层面存在重复。")
 
     IAR_Rept1 = pd.merge(
         IAR_Rept,
         pattern_firm_qtr,
         how="inner",
         on=["Stkcd", "Accper"],
-        validate="1:1",
+        validate="m:1",
     )
 
     if IAR_Rept1.empty:
@@ -522,21 +510,29 @@ def merge_announcement_features(
 def build_attention_dummies(
     events: pd.DataFrame,
 ) -> pd.DataFrame:
-    """按公告年份构造高关注、高交易量和高盈余惊喜指标。"""
+    """公司日特征按唯一公告分组，盈余惊喜按报告明细分组。"""
     events = events.copy()
     events["year"] = events["Annodt"].dt.year
 
-    # 新闻关注度和异常交易量：按年划分为高低两组。
-    events["AEV_nonmiss_medGr"] = (
-        events.groupby("year")["AEV_nonmiss"]
-        .transform(lambda s: xtile_by_group(s, 2))
-    )
-
-    for col in ["avol", "avolS"]:
-        events[f"{col}_medGr"] = (
-            events.groupby("year")[col]
+    # 一次公告即使包含两份报告，也只在公司日特征的年度分位中出现一次。
+    daily_cols = ["AEV_nonmiss", "avol", "avolS"]
+    company_days = events[
+        ["Stkcd", "Annodt", "year", *daily_cols]
+    ].drop_duplicates(["Stkcd", "Annodt"]).copy()
+    daily_flags = []
+    for col in daily_cols:
+        flag = f"{col}_medGr"
+        company_days[flag] = (
+            company_days.groupby("year")[col]
             .transform(lambda s: xtile_by_group(s, 2))
         )
+        daily_flags.append(flag)
+    events = events.merge(
+        company_days[["Stkcd", "Annodt", *daily_flags]],
+        on=["Stkcd", "Annodt"],
+        how="left",
+        validate="m:1",
+    )
 
     # 盈余惊喜绝对值：按年划分为十组。
     for col in [
@@ -608,23 +604,9 @@ def build_attention_dummies(
 def make_same_day_pairs(
     event_flags: pd.DataFrame,
 ) -> pd.DataFrame:
-    """生成同一公告日内的有方向公司对。"""
-
-    duplicate_company_day = event_flags.duplicated(
-        ["Stkcd", "Annodt"],
-        keep=False,
-    )
-
-    if duplicate_company_day.any():
-        duplicate_count = int(
-            duplicate_company_day.sum()
-        )
-
-        raise ValueError(
-            "同一家公司在同一公告日存在多条记录，"
-            "不能直接构造公司对。"
-            f"重复记录数：{duplicate_count}"
-        )
+    """在报告明细层生成同日有方向公司对，保留双方实际财报期。"""
+    if event_flags.duplicated(["Stkcd", "Annodt", "Accper"]).any():
+        raise ValueError("同一家公司、公告日和财报期存在重复报告记录。")
     rename_cols = [
         "Stkcd",
         "Accper",
@@ -663,6 +645,11 @@ def make_same_day_pairs(
     pairs = pairs.loc[
         pairs["Stkcd"] != pairs["StkcdRecall"]
     ].copy()
+    # 在完整历史配对表中计不同公司数，避免双报告及后续多锚点展开加倍。
+    pairs["nrFirmsAnnouncing"] = (
+        pairs.groupby(["Stkcd", "Annodt"])["StkcdRecall"]
+        .transform("nunique")
+    )
 
     # 把公司对的三个关键字段放到最前面。
     front_cols = [
@@ -683,11 +670,11 @@ def make_same_day_pairs(
     ).reset_index(drop=True)
 
 #===============================================================================
-## 滚动构造 记忆矩阵 。这里基于原文，但是原文的逻辑有问题
+## 当前模式公告独立触发，历史配对仅提供已形成的关系
 #===============================================================================
 
-# 如果 A 当前季度公告日没有出现在“同日公告公司对”表中，也就是当天没有其他 Pattern firm
-# 和 A 同日公告，那么即使 A 公司上季度和其他公司一起公告过，这次公告也不会被识别为 cueing event。
+# 当前公告直接从合格报告表提取，不要求当天另有模式公司公告。
+# 历史配对双方分别按各自报告判断模式资格；无需双方财报期相同。
 
 # IAR_Rept4_merge 里的 Stkcd*Accper 不全：
 # 原始 IAR_Rept.csv 有 285,703 个唯一 Stkcd*Accper，
@@ -720,7 +707,7 @@ def get_memory_vars() -> Dict[str, Tuple[str, str]]:
 
 
 def get_memory_core_columns() -> list[str]:
-    """返回补入事件交易日前，记忆矩阵应有的 98 个字段。"""
+    """返回关系、机制及真实支持报告来源字段。"""
     memory_suffixes = list(get_memory_vars().keys())
     memory_suffixes.append("anyTopMover")
 
@@ -757,6 +744,11 @@ def get_memory_core_columns() -> list[str]:
         f"daysSinceOverlapLag{lag}Alt"
         for lag in range(0, 5)
     ]
+    source_cols = [
+        "currentAccpersLag1",
+        "lag1AnnualAnchor",
+        "lag1Q1Anchor",
+    ]
 
     return (
         key_cols
@@ -765,6 +757,7 @@ def get_memory_core_columns() -> list[str]:
         + extreme_sue_cols
         + nr_firms_cols
         + days_since_cols
+        + source_cols
     )
 
 
@@ -772,36 +765,35 @@ def add_quarter_lag_columns(
     temp: pd.DataFrame,
     pair_cols: list[str],
 ) -> pd.DataFrame:
-    """生成季度距离变量和 quarterLag0Alt 至 quarterLag4Alt。"""
+    """逐报告计算精确季度差；当期共同公告与过去记忆分别判断。"""
     temp = temp.copy()
 
-    # 以窗口内最大的 Accper（财报截止日）划分季度滞后。
-    # 如果公司后来补发较旧财报，当天的共同公告可能被归入历史滞后期。
-    # 当前参与配对的模式公司样本中，此类提示事件核查为 0 次；上游数据更新后需重新核查。
-    temp["maxAccper_byStkcd"] = (
-        temp.groupby("Stkcd")["Accper"].transform("max")
+    current_quarter = (
+        temp["currentAccper"].dt.year * 4
+        + temp["currentAccper"].dt.quarter
     )
+    historical_quarter = (
+        temp["Accper"].dt.year * 4
+        + temp["Accper"].dt.quarter
+    )
+    quarter_gap = current_quarter - historical_quarter
 
+    # 保留原距离变量的经济含义：财报截止日差，而非历史公告的自然日距离。
     temp["days_from_current_accper"] = (
-        temp["maxAccper_byStkcd"] - temp["Accper"]
+        temp["currentAccper"] - temp["Accper"]
     ).dt.days
+    is_current = temp["isCurrentOverlap"].astype(bool)
+    historical_days = (temp["currentAnnodt"] - temp["Annodt"]).dt.days
+    is_history = ~is_current & historical_days.between(1, 364)
 
-    diff_days = temp["days_from_current_accper"]
-
-    # 先生成逐行的季度位置变量。
+    # 零期仅表示当期共同公告，供替代线索筛选；不属于过去形成的记忆。
     dummy_data = {
-        "dummyQuarterLag0Alt": (
-            temp["Accper"] == temp["maxAccper_byStkcd"]
-        ).astype(int)
+        "dummyQuarterLag0Alt": is_current.astype(int)
     }
 
     for lag in range(1, 5):
-        lower = (lag - 1) * 100
-        upper = lag * 100
-
         dummy_data[f"dummyQuarterLag{lag}Alt"] = (
-            (diff_days > lower) &
-            (diff_days <= upper)
+            is_history & quarter_gap.eq(lag)
         ).astype(int)
 
     temp = pd.concat(
@@ -956,12 +948,10 @@ def add_nr_firms_announcing(
     """生成不同季度位置对应的同日公告公司数量。"""
     temp = temp.copy()
 
-    # 统计每家线索公司在每个公告日对应多少家其他公告公司。
-    temp["nrFirmsAnnouncing"] = (
-        temp.groupby(
-            ["Stkcd", "Annodt"]
-        )["StkcdRecall"].transform("size")
-    )
+    # 人数已在完整同日配对表中按不同公司预先统计。
+    # 此处已展开当前报告锚点，不能再按展开后的报告行数计算。
+    if "nrFirmsAnnouncing" not in temp.columns:
+        raise ValueError("缺少历史同日公告公司数量，请从完整同日配对表重新构造。")
 
     int_data = {}
 
@@ -1048,7 +1038,7 @@ def add_days_since_overlap(
 def keep_final_memory_columns(
     memory_matrix: pd.DataFrame,
 ) -> pd.DataFrame:
-    """检查并保留记忆矩阵应输出的 98 个核心字段。"""
+    """检查并保留关系、机制和真实支持报告来源字段。"""
     expected_cols = get_memory_core_columns()
 
     missing_cols = [
@@ -1068,9 +1058,10 @@ def keep_final_memory_columns(
 
 def build_memory_matrix(
     same_day_pairs: pd.DataFrame,
+    current_events: pd.DataFrame,
     test_days: Optional[int] = None,
 ) -> pd.DataFrame:
-    """按照原文口径滚动构造记忆矩阵。"""
+    """每份当前模式报告分别识别过去关系，再汇总到唯一公司对公告。"""
 
     if test_days is not None and test_days < 0:
         raise ValueError(
@@ -1081,9 +1072,14 @@ def build_memory_matrix(
     memory_vars = get_memory_vars()
     memory_list: list[pd.DataFrame] = []
 
-    # 继续使用同日公告公司对中的日期，保持原文样本口径。
+    # 当前提示从模式报告明细直接提取，独自公告也可以触发历史关系。
+    current_reports = (
+        current_events[["Stkcd", "Annodt", "Accper"]]
+        .drop_duplicates()
+        .rename(columns={"Accper": "currentAccper"})
+    )
     annodt_list = (
-        same_day_pairs["Annodt"]
+        current_reports["Annodt"]
         .dropna()
         .drop_duplicates()
         .sort_values()
@@ -1104,22 +1100,39 @@ def build_memory_matrix(
     ):
         min_annodt = current_date - pd.Timedelta(days=364)
 
-        # 1. 取当前公告日及此前364天的滚动窗口。
-        temp = same_day_pairs[
-            (
-                same_day_pairs["Annodt"]
-                >= min_annodt
-            )
-            & (
-                same_day_pairs["Annodt"]
-                <= current_date
-            )
+        current_day = current_reports.loc[
+            current_reports["Annodt"].eq(current_date),
+            ["Stkcd", "currentAccper"],
+        ]
+        current_stocks = current_day["Stkcd"].unique()
+
+        # 1. 历史共同公告严格早于当前自然公告日，最远回看364天。
+        history = same_day_pairs.loc[
+            same_day_pairs["Annodt"].ge(min_annodt)
+            & same_day_pairs["Annodt"].lt(current_date)
+            & same_day_pairs["Stkcd"].isin(current_stocks)
         ].copy()
+        history = history.merge(
+            current_day,
+            on="Stkcd",
+            how="inner",
+            validate="m:m",
+        )
+        history["isCurrentOverlap"] = False
+
+        # 2. 当期共同公告单独加入，仅能支持零期，不能支持任何正滞后期。
+        current_pairs = same_day_pairs.loc[
+            same_day_pairs["Annodt"].eq(current_date)
+        ].copy()
+        current_pairs["currentAccper"] = current_pairs["Accper"]
+        current_pairs["isCurrentOverlap"] = True
+        temp = pd.concat([history, current_pairs], ignore_index=True)
 
         if temp.empty:
             continue
+        temp["currentAnnodt"] = current_date
 
-        # 2. 构造各类记忆变量。
+        # 3. 先在实际报告配对行上判断季度与机制，再对公司对取并集。
         temp = add_quarter_lag_columns(
             temp,
             pair_cols,
@@ -1146,39 +1159,32 @@ def build_memory_matrix(
             pair_cols,
         )
 
-        # 整理前面多次增加列产生的内存碎片。
-        temp = temp.copy()
-
-        # 3. 每个有方向公司对只保留最后一条历史共同公告。
-        temp = (
-            temp.sort_values(
-                ["Stkcd", "StkcdRecall", "Annodt"]
-            )
-            .groupby(
-                pair_cols,
-                as_index=False,
-            )
-            .tail(1)
-            .copy()
+        # 来源只能从真正支持滞后一期的逐行标记生成，不能从公司对并集反推。
+        sources = temp.loc[
+            temp["dummyQuarterLag1Alt"].eq(1),
+            [*pair_cols, "currentAccper"],
+        ].drop_duplicates()
+        sources["currentAccpersLag1"] = sources["currentAccper"].dt.strftime("%Y-%m-%d")
+        sources["lag1AnnualAnchor"] = sources["currentAccper"].dt.quarter.eq(4).astype(int)
+        sources["lag1Q1Anchor"] = sources["currentAccper"].dt.quarter.eq(1).astype(int)
+        sources = sources.groupby(pair_cols, as_index=False).agg(
+            currentAccpersLag1=("currentAccpersLag1", lambda s: "|".join(sorted(set(s)))),
+            lag1AnnualAnchor=("lag1AnnualAnchor", "max"),
+            lag1Q1Anchor=("lag1Q1Anchor", "max"),
         )
 
-        # 4. 把历史公告日改成线索公司的当前公告日。
-        temp["maxAnnodt_byStkcd"] = (
-            temp.groupby("Stkcd")["Annodt"]
-            .transform("max")
-        )
-
-        temp["Annodt"] = temp["maxAnnodt_byStkcd"]
-
-        # 5. 只保留本次循环对应的当前公告事件。
-        temp = temp[
-            temp["Annodt"] == current_date
-        ].copy()
-
-        if temp.empty:
-            continue
-
-        memory_list.append(temp)
+        # 各机制与人数、距离沿用同一滞后内取最大值，报告展开不增加事件数。
+        value_cols = [
+            col for col in get_memory_core_columns()
+            if col not in {"Annodt", *pair_cols, "currentAccpersLag1", "lag1AnnualAnchor", "lag1Q1Anchor"}
+        ]
+        collapsed = temp.groupby(pair_cols, as_index=False)[value_cols].max()
+        collapsed = collapsed.merge(sources, on=pair_cols, how="left", validate="1:1")
+        collapsed["currentAccpersLag1"] = collapsed["currentAccpersLag1"].fillna("")
+        for col in ["lag1AnnualAnchor", "lag1Q1Anchor"]:
+            collapsed[col] = collapsed[col].fillna(0).astype(int)
+        collapsed["Annodt"] = current_date
+        memory_list.append(collapsed)
 
     if not memory_list:
         empty_matrix = pd.DataFrame(
@@ -1197,6 +1203,7 @@ def build_memory_matrix(
         empty_matrix["StkcdRecall"] = pd.Series(
             dtype="string"
         )
+        empty_matrix["currentAccpersLag1"] = pd.Series(dtype="string")
 
         return empty_matrix
 
@@ -1325,6 +1332,21 @@ def validate_final_memory_matrix(
             f"重复记录数：{duplicate_count}"
         )
 
+    source = memory_matrix["currentAccpersLag1"].fillna("")
+    if source.ne("").ne(memory_matrix["quarterLag1Alt"].eq(1)).any():
+        raise ValueError("滞后一期关系与真实支持报告来源不一致。")
+    for col, months in [
+        ("lag1AnnualAnchor", "10|11|12"),
+        ("lag1Q1Anchor", "01|02|03"),
+    ]:
+        # 来源是升序的年月日字符串集合；此处按财报截止月份核对季度标记。
+        expected = source.str.contains(
+            rf"(?:^|\|)\d{{4}}-(?:{months})-\d{{2}}(?:\||$)",
+            regex=True,
+        )
+        if expected.ne(memory_matrix[col].eq(1)).any():
+            raise ValueError(f"当前报告来源与季度基准标记不一致：{col}")
+
 
 def run_pipeline(
     root: Optional[str | Path] = None,
@@ -1367,6 +1389,7 @@ def run_pipeline(
     # 5. 滚动构造记忆矩阵。
     memory_matrix = build_memory_matrix(
         same_day_pairs,
+        event_flags,
         test_days=test_days,
     )
 
@@ -1461,7 +1484,7 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-# 最终预计 100 个变量：
+# 最终预计 103 个变量：
 # 5 个日期及公司字段
 # + 5 个 quarterLag 变量
 # + 56 个普通 lag 强关联变量
@@ -1469,4 +1492,5 @@ if __name__ == "__main__":
 # + 24 个极端正向/负向 SUE 变量
 # + 5 个 nrFirmsAnnLag 变量
 # + 5 个 daysSinceOverlapLag 变量
-# = 100 个变量
+# + 3 个滞后一期实际支持报告来源变量
+# = 103 个变量

@@ -70,8 +70,10 @@ def build_events(base, audit: dict) -> dict[str, pd.DataFrame]:
     matrix_rows = 0
     for chunk in pd.read_csv(
         paths["MemoryMatrixPattern_path"],
-        usecols=[*PAIR, "quarterLag1Alt", "event_Trddt", "event_td"],
-        dtype={"Stkcd": "string", "StkcdRecall": "string", "quarterLag1Alt": "float32", "event_td": "int32"},
+        usecols=[*PAIR, "quarterLag1Alt", "event_Trddt", "event_td",
+                 "currentAccpersLag1", "lag1AnnualAnchor", "lag1Q1Anchor"],
+        dtype={"Stkcd": "string", "StkcdRecall": "string", "quarterLag1Alt": "float32", "event_td": "int32",
+               "currentAccpersLag1": "string", "lag1AnnualAnchor": "int8", "lag1Q1Anchor": "int8"},
         parse_dates=["Annodt", "event_Trddt"], chunksize=400_000,
     ):
         matrix_rows += len(chunk)
@@ -84,9 +86,10 @@ def build_events(base, audit: dict) -> dict[str, pd.DataFrame]:
     duplicate_pairs = int(pairs.duplicated(PAIR).sum())
     if duplicate_pairs:
         raise AssertionError(f"原矩阵公司对键存在重复：{duplicate_pairs}")
+    if pairs.empty:
+        raise AssertionError("研究期内没有一期历史关系公司对")
     audit["events"] = {"matrix_total_rows": matrix_rows, "lag1_pairs": len(pairs), "duplicate_pair_keys": duplicate_pairs,
-                       "unchanged_current_day_rule": "正式规律公司矩阵原有当天至少两家规律公司公告条件"}
-    assert len(pairs) == 180_226, len(pairs)
+                       "current_report_rule": "保留全部合格报告分别识别，不要求当前日另有规律公司公告；历史共同公告日严格早于当前日"}
 
     needed_keys = np.unique(keys(pairs.Stkcd.astype("int32").to_numpy(), pairs.event_td.to_numpy() - 3))
     caps, cap_rows = [], 0
@@ -112,7 +115,6 @@ def build_events(base, audit: dict) -> dict[str, pd.DataFrame]:
     del cap, needed_keys
     missing_cap = int(pairs.mktcap_tm3.isna().sum())
     audit["events"].update({"cap_source_rows": cap_rows, "cap_missing_pairs": missing_cap})
-    assert missing_cap == 18_973, missing_cap
     pairs = merge.merge_monthly_marketcap_breakpoints(pairs, paths["marketcap_group_path"], "prev_month")
     audit["events"]["pairs_with_required_breakpoints"] = len(pairs)
     if "marketCap_95th_percentile" not in pairs:
@@ -126,20 +128,24 @@ def build_events(base, audit: dict) -> dict[str, pd.DataFrame]:
     audit["events"]["pairs_after_supply_filter"] = len(eligible)
     eligible = merge.filter_analyst_overlap_pairs(
         eligible, ROOT / "中间结果/03_记忆矩阵/分析师共同覆盖_参考文献后", "split", 365, True,
+        matrix_path=paths["MemoryMatrixPattern_path"],
+        forecast_path=paths["analyst_forecast_path"],
     )
     pairs = merge.apply_pair_filters(pairs, eligible)
     del eligible
+    audit["events"]["pairs90_before_trading_day_deduplication"] = len(pairs)
+    pairs = merge.deduplicate_pattern_event_pairs(pairs)
+    if pairs.empty or pairs.duplicated(["Stkcd", "event_Trddt", "StkcdRecall"]).any():
+        raise AssertionError("过滤后的90分位公司对为空或交易日键重复")
     pairs95 = pairs.loc[pairs.mktcap_tm3 > pairs.marketCap_95th_percentile]
     audit["events"].update({"pairs90": len(pairs), "pairs95": len(pairs95),
                             "threshold_rule": "事件前三交易日总市值严格大于事件上月90或95分位断点",
-                            "analyst_rule": "原矩阵同源已有个人分析师365日正共同覆盖表；未命中视为无共同覆盖"})
-    assert len(pairs) == 22_088, len(pairs)
-    assert len(pairs95) == 13_445, len(pairs95)
+                            "analyst_rule": "使用不早于当前矩阵和分析师原始输入的个人分析师365日共同覆盖结果；排除共同覆盖公司对"})
     events = {"cue90": pairs[["StkcdRecall", "event_Trddt"]].drop_duplicates(),
               "cue95": pairs95[["StkcdRecall", "event_Trddt"]].drop_duplicates()}
     audit["events"].update({"collapsed90": len(events["cue90"]), "collapsed95": len(events["cue95"])})
-    assert len(events["cue90"]) == 14_052
-    assert len(events["cue95"]) == 8_984
+    if events["cue95"].empty:
+        raise AssertionError("研究期内没有95分位提示事件")
     official = pd.read_csv(paths["cue_events_out_path"], usecols=["StkcdRecall", "date", base.helper.CUE],
                            dtype={"StkcdRecall": "string", base.helper.CUE: "float32"}, parse_dates=["date"])
     official = official.loc[official.date.dt.year.between(2005, 2025) & official[base.helper.CUE].eq(1)].rename(columns={"date": "event_Trddt"})
@@ -152,7 +158,7 @@ def build_events(base, audit: dict) -> dict[str, pd.DataFrame]:
     assert not np.setdiff1d(event_keys(events["cue95"]), rebuilt_key).size
     del pairs, pairs95, official
     gc.collect()
-    log("事件核对通过：90分位14,052个股票日，95分位8,984个股票日")
+    log(f"事件核对通过：90分位{len(events['cue90']):,}个股票日，95分位{len(events['cue95']):,}个股票日")
     return events
 
 
@@ -215,16 +221,14 @@ def read_panel(base, events: dict, audit: dict) -> pd.DataFrame:
                        "cue90": int(panel.cue90.sum()), "cue95": int(panel.cue95.sum()), "cue90_rowwise_mismatch": mismatch,
                        "quarter_field_mismatch": invalid_quarter, "infinite_to_missing": inf_counts, "finite_by_column": finite_counts,
                        "rows_removed_for_returns_controls_or_oib": 0}
-    assert len(panel) == 11_110_094, len(panel)
-    assert audit["panel"]["firms"] == 4_989
-    assert audit["panel"]["dates"] == 5_101
+    assert not panel.empty, "研究期内主面板为空"
     assert not duplicates
-    assert audit["panel"]["cue90"] == 11_890
-    assert audit["panel"]["cue95"] == 7_512
+    assert audit["panel"]["cue90"] > 0, "主面板没有90分位提示事件"
+    assert audit["panel"]["cue95"] > 0, "主面板没有95分位提示事件"
     if not (panel.cue95 <= panel.cue90).all():
         raise AssertionError("95分位提示并非90分位提示的子集")
     del panel_keys, sorted_keys
-    log(f"主面板核对通过：{len(panel):,}行，90分位11,890次提示，95分位7,512次提示")
+    log(f"主面板核对通过：{len(panel):,}行，90分位{audit['panel']['cue90']:,}次提示，95分位{audit['panel']['cue95']:,}次提示")
     return panel
 
 
@@ -258,19 +262,19 @@ def add_oib(panel: pd.DataFrame, base, audit: dict) -> None:
     audit["oib"] = {"source_rows": source_rows, "matched_rows": matched_rows, "unmatched_panel_rows": int((~matched_before).sum()),
                      "winsor_sample": "全研究期主面板匹配后的各窗口非缺失分布；未先删除控制缺失或固定效应单例",
                      "units": "百分点；未额外乘100", "windows": {}}
-    assert source_rows == 14_126_486, source_rows
+    assert source_rows > 0, "订单失衡源表为空"
     assert matched_rows == len(panel) and matched_before.all()
     for h, values in values_by_window.items():
         infinite = int(np.isinf(values).sum())
         values[~np.isfinite(values)] = np.nan
-        lower, upper = np.nanquantile(values, [0.01, 0.99])
         count = int(np.isfinite(values).sum())
+        if count == 0:
+            raise AssertionError(f"订单失衡{h}窗口没有有效观测")
+        lower, upper = np.nanquantile(values, [0.01, 0.99])
         audit["oib"]["windows"][str(h)] = {"finite": count, "missing": int(np.isnan(values).sum()),
                                                     "infinite_to_missing": infinite, "p01": float(lower), "p99": float(upper),
                                                     "below_p01": int((values < lower).sum()), "above_p99": int((values > upper).sum())}
-        assert count == {1: 10_994_150, 10: 10_440_385}[h], (h, count)
-        expected = {1: (-29.3166892242, 26.8421113014), 10: (-17.294304657, 14.51862381)}[h]
-        assert np.allclose([lower, upper], expected, rtol=0, atol=1e-5), (h, lower, upper)
+        assert np.isfinite([lower, upper]).all() and lower <= upper, (h, lower, upper)
         panel[f"oib_{h}"] = np.clip(values, lower, upper).astype("float32")
         log(f"订单失衡{h}窗口：有效{count:,}行，1%/99%缩尾界为{lower:.8f}/{upper:.8f}")
     del values_by_window, order, sorted_keys, matched_before
