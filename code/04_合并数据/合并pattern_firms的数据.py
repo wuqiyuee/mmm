@@ -2568,19 +2568,33 @@ def winsorize_limits(s, p=0.01):
     """
     只计算缩尾阈值，不立刻生成缩尾后的整列。
     """
+    print(
+        f"[缩尾阈值] {s.name}：开始计算下侧分位点。",
+        flush=True,
+    )
     lower = s.quantile(p)
+    print(
+        f"[缩尾阈值] {s.name}：下侧分位点完成，开始计算上侧分位点。",
+        flush=True,
+    )
     upper = s.quantile(1 - p)
+    print(
+        f"[缩尾阈值] {s.name}：上下侧分位点均已完成。",
+        flush=True,
+    )
     return lower, upper
 
 
 def add_winsor_col(df, col, winsor_limits):
     """使用传入的全样本缩尾阈值，生成缩尾后的变量。"""
 
+    print(f"[生成缩尾列] {col}：开始。", flush=True)
     lower, upper = winsor_limits[col]
     df[f"{col}_w"] = df[col].clip(
         lower=lower,
         upper=upper,
     )
+    print(f"[生成缩尾列] {col}：完成。", flush=True)
 
 
 def compute_pattern_winsor_limits(daily_panel, p=0.01):
@@ -2615,6 +2629,10 @@ def compute_pattern_winsor_limits(daily_panel, p=0.01):
         if col in daily_panel.columns
     ]
 
+    print(
+        f"[缩尾阈值] 开始计算，共 {len(winsor_source_cols)} 个变量。",
+        flush=True,
+    )
     winsor_limits = {}
     for col in winsor_source_cols:
         winsor_limits[col] = winsorize_limits(
@@ -2622,6 +2640,7 @@ def compute_pattern_winsor_limits(daily_panel, p=0.01):
             p=p,
         )
 
+    print("[缩尾阈值] 所有变量计算完成。", flush=True)
     return winsor_limits, winsor_source_cols
 
 
@@ -2629,6 +2648,7 @@ def compute_pattern_winsor_limits(daily_panel, p=0.01):
 def prepare_pattern_baseline_inputs(daily_panel, winsor_limits):
     """准备基准回归所需的缩尾因变量和季度标识，并整理表结构。"""
 
+    print("[基准变量] 开始生成两个基准因变量的缩尾列。", flush=True)
     # 使用已经算好的阈值，先生成两个基准因变量的缩尾列。
     for col in [
         "chAdjreturn_t_tp1_Recall",
@@ -2641,25 +2661,20 @@ def prepare_pattern_baseline_inputs(daily_panel, winsor_limits):
                 winsor_limits=winsor_limits,
             )
 
+    print("[基准变量] 两个基准缩尾列处理完成，开始生成季度标识。", flush=True)
     # 生成日历季度和年度—季度固定效应标识。
     daily_panel["quarter"] = daily_panel["Trddt"].dt.quarter
     daily_panel["yearQuarter"] = (
         daily_panel["Trddt"].dt.to_period("Q")
     )
+    print("[基准变量] 季度及年度季度标识生成完成。", flush=True)
 
-    # 核心标识列放在最前面，并按被提示公司和日期排序。
-    front_cols = ["StkcdRecall", "Trddt"]
-    other_cols = [
-        col
-        for col in daily_panel.columns
-        if col not in front_cols
-    ]
-
-    return (
-        daily_panel[front_cols + other_cols]
-        .sort_values(["StkcdRecall", "Trddt"])
-        .reset_index(drop=True)
+    print(
+        "[基准变量] 基准变量准备完成，整表整理将在样本筛选后进行。",
+        flush=True,
     )
+
+    return daily_panel
 
 
 
@@ -2675,19 +2690,34 @@ def baseline_regression_sample_mask(df, dep_col, rhs_cols, fe_cols, cluster_cols
     if missing_cols:
         raise ValueError(f"缺少基准回归变量，不能复刻 e(sample)：{missing_cols}")
 
+    print(f"[样本掩码] {dep_col}：开始检查必要变量是否缺失。", flush=True)
     mask = df[needed_cols].notna().all(axis=1)
 
+    print(
+        f"[样本掩码] {dep_col}：非缺失检查完成，"
+        "开始将固定效应键转为字符串并逐行拼接。",
+        flush=True,
+    )
     fe_key = (
         df.loc[mask, fe_cols]
         .astype(str)
         .agg("×".join, axis=1)
     )
 
+    print(
+        f"[样本掩码] {dep_col}：固定效应键拼接完成，开始统计组内数量。",
+        flush=True,
+    )
     fe_count = fe_key.value_counts()
     keep_index = fe_key.loc[fe_key.map(fe_count) > 1].index
 
+    print(
+        f"[样本掩码] {dep_col}：组内数量判断完成，开始生成最终行掩码。",
+        flush=True,
+    )
     out = pd.Series(False, index=df.index)
     out.loc[keep_index] = True
+    print(f"[样本掩码] {dep_col}：最终行掩码生成完成。", flush=True)
     return out
 
 
@@ -2726,6 +2756,10 @@ def filter_pattern_baseline_sample(daily_panel):
         "chAdjreturn_t_tp1_Recall_w",
         "chAdjreturn_t_tp10_Recall_w",
     ]:
+        print(
+            f"[基准筛样] {dep_col}：开始，当前行数 {len(daily_panel)}。",
+            flush=True,
+        )
         sample_mask = baseline_regression_sample_mask(
             df=daily_panel,
             dep_col=dep_col,
@@ -2734,7 +2768,15 @@ def filter_pattern_baseline_sample(daily_panel):
             cluster_cols=["StkcdRecall", "Trddt"],
         )
 
+        print(
+            f"[基准筛样] {dep_col}：掩码计算完成，开始筛选并复制整表。",
+            flush=True,
+        )
         daily_panel = daily_panel.loc[sample_mask].copy()
+        print(
+            f"[基准筛样] {dep_col}：整表筛选完成，剩余 {len(daily_panel)} 行。",
+            flush=True,
+        )
 
     return daily_panel
 
@@ -2811,7 +2853,7 @@ def add_remaining_pattern_winsor_cols(
 ):
     """使用筛选前计算的阈值，补生成其余缩尾列。"""
 
-    print("基准样本筛选后补生成其余缩尾变量......")
+    print("基准样本筛选后补生成其余缩尾变量......", flush=True)
 
     for col in winsor_source_cols:
         w_col = f"{col}_w"
@@ -3298,7 +3340,7 @@ def main(
         daily_panel=daily_panel,
     )
 
-    print("开始缩尾......")
+    print("开始缩尾......", flush=True)
 
     # 在筛选基准样本前，计算全样本缩尾阈值。
     winsor_limits, winsor_source_cols = compute_pattern_winsor_limits(
@@ -3306,18 +3348,55 @@ def main(
         p=0.01,
     )
 
-    # 生成两个缩尾因变量、季度标识，并整理表顺序。
+    print(
+        "[处理进度] 全样本缩尾阈值计算完成，开始准备基准变量。",
+        flush=True,
+    )
+
+    # 生成两个基准缩尾因变量和季度标识。
     daily_panel = prepare_pattern_baseline_inputs(
         daily_panel=daily_panel,
         winsor_limits=winsor_limits,
     )
 
-    # 先筛短窗口，再在剩余样本中筛长窗口。
+    print("[处理进度] 基准变量准备完成。", flush=True)
+    print(
+        "[处理进度] 开始短窗口、长窗口两轮基准样本筛选。",
+        flush=True,
+    )
+
+    # 沿用原来的筛样条件：先短窗口，再长窗口。
     daily_panel = filter_pattern_baseline_sample(
         daily_panel=daily_panel,
     )
 
-        # 第五阶段：统计提示范围，并完成最终样本整理。
+    print(
+        f"[处理进度] 两轮基准样本筛选完成，当前表结构：{daily_panel.shape}。",
+        flush=True,
+    )
+
+    # 样本确定后，再整理列顺序、行顺序和索引。
+    front_cols = ["StkcdRecall", "Trddt"]
+    other_cols = [
+        col
+        for col in daily_panel.columns
+        if col not in front_cols
+    ]
+
+    print(
+        "[处理进度] 开始对筛选后的面板进行列重排、排序和重置索引。",
+        flush=True,
+    )
+
+    daily_panel = (
+        daily_panel[front_cols + other_cols]
+        .sort_values(["StkcdRecall", "Trddt"])
+        .reset_index(drop=True)
+    )
+
+    print("[处理进度] 筛选后面板的整表整理完成。", flush=True)
+
+    # 第五阶段：统计提示范围，并完成最终样本整理。
 
     # 使用聚合前保留的配对表，统计最终样本中的提示范围。
     nr_firms_cued, nr_firms_cued_summary = summarize_pattern_cue_reach(

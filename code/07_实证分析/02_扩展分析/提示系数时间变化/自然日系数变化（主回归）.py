@@ -5,7 +5,7 @@
 控制变量共27个；无固定效应，使用异方差稳健标准误和双侧检验。
 某组仅1条观测时，图中用橙色三角展示系数，不展示其置信区间。
 默认显著性水平10%，对应90%置信区间。直接运行时才读取数据、估计和保存图片。
-图片文件名包含样本日期范围、自然日、主回归、窗口和置信水平。
+图片文件名包含自然日、主回归、窗口和置信水平。
 """
 
 from pathlib import Path
@@ -26,7 +26,7 @@ input_path = root / "中间结果/04_合并数据/Pattern样本_最终回归面�
 image_dir = root / "图表结果/02_扩展分析/提示系数时间变化"
 
 # 窗口终点5表示[t,t+5]，包含当天和随后5个交易日。
-horizon = 5
+horizon = 4
 dependent_variable = f"chAdjreturn_t_tp{horizon}_Recall_w"
 window_label = f"[t,t+{horizon}]"
 cue = "quarterLag1size90plus"
@@ -383,7 +383,7 @@ def main():
         fig, ax = plot_daily_results(daily_results)
         image_dir.mkdir(parents=True, exist_ok=True)
         figure_path = image_dir / (
-            f"样本{start_date}至{end_date}_自然日_主回归_"
+            "自然日_主回归_"
             f"窗口{window_label}_{confidence_level:.0%}置信区间.png"
         )
         fig.savefig(figure_path, dpi=300, bbox_inches="tight")

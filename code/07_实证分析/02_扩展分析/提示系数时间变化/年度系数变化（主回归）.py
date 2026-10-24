@@ -20,7 +20,7 @@ root = Path("/Users/qiyuewu/Desktop/mmm复现数据包")
 image_dir = root / "图表结果/02_扩展分析/提示系数时间变化"
 input_path = root / "中间结果/04_合并数据/Pattern样本_最终回归面板.csv"
 
-horizon = 5
+horizon = 4
 start_year = 2005
 end_year = 2025
 significance_level = 0.10
@@ -303,7 +303,7 @@ def main():
     fig.tight_layout()
     image_dir.mkdir(parents=True, exist_ok=True)
     figure_path = image_dir / (
-        f"样本{start_year}-01-01至{end_year}-12-31_年度_主回归_"
+        "年度_主回归_"
         f"窗口{window_label}_{confidence_level:.0%}置信区间.png"
     )
     fig.savefig(figure_path, dpi=300, bbox_inches="tight")
