@@ -521,7 +521,7 @@ def read_figure2_panel(
 
     data = data.loc[
         data["Trddt"].dt.year.between(START_YEAR, END_YEAR)
-    ].copy()
+    ]
 
     # 两个分组在所有窗口中定义相同。预先编号可以避免50次重复
     # 分组；窗口筛选只会删除行，不会改变组的归属。
@@ -614,13 +614,13 @@ def run_date_fe_regression(
         )
     )
 
-    reg = (
-        data[
-            needed
-        ]
-        .dropna()
-        .copy()
-    )
+    # 逐列检查缺失，避免生成整张缺失标记表和额外的显式复制。
+    valid_rows = np.ones(len(data), dtype=bool)
+    for col in needed:
+        valid_rows &= data[col].notna().to_numpy()
+
+    reg = data.loc[valid_rows, needed]
+    del valid_rows
 
     reg[
         "_fe_firm_yearquarter"

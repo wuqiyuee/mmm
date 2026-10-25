@@ -243,14 +243,17 @@ def draw_dynamic_figure(table, title, output_path):
     print(f"图已保存到：{output_path}")
 
 
-def load_pattern_panel(include_returns: bool):
-    """沿用原模式公司面板读取口径；图3只读取自身所用控制变量和标识字段。"""
+def load_pattern_panel(include_returns: bool, horizons=None):
+    """沿用原样本口径；图2按待估窗口读取收益，图3只读取共同变量。"""
     all_cols = pd.read_csv(pattern_sample_PATH, nrows=0).columns.tolist()
 
-    # 被解释变量
+    # 未指定时读取全部窗口；续算时只读取待完成窗口。
+    if horizons is None:
+        horizons = range(1, 51)
+
     y_cols = [
         f"chAdjreturn_t_tp{i}_Recall_w"
-        for i in range(1, 51)
+        for i in horizons
     ]
 
     # 自己的财报公告日
@@ -297,14 +300,14 @@ def load_pattern_panel(include_returns: bool):
     df["Trddt"] = pd.to_datetime(df["Trddt"], errors="raise")
     df = df.loc[
         df["Trddt"].dt.year.between(START_YEAR, END_YEAR)
-    ].copy()
+    ]
     print("模式公司数据读取成功！")
 
     return df, control_cols
 
 
-def run_figure2(df, control_cols, fig2_result_path, fig2_progress_path, fig2_out_path):
-    """只估计图2的50个累计收益窗口，并保留原数值单位和逐窗口进度。"""
+def run_figure2(fig2_result_path, fig2_progress_path, fig2_out_path):
+    """先核对进度，再读取待完成窗口所需的数据，并保留原估计口径。"""
     results, fig2_signature = load_progress(
         fig2_progress_path,
         [pattern_sample_PATH],
@@ -315,6 +318,13 @@ def run_figure2(df, control_cols, fig2_result_path, fig2_progress_path, fig2_out
     todo2 = [i for i in range(1, 51) if i not in done2]
 
     print(f"图2已恢复 {len(done2)} 个窗口，待计算 {len(todo2)} 个。")
+
+    # 全部完成时不读取大面板，直接使用已有结果继续整理和绘图。
+    if todo2:
+        df, control_cols = load_pattern_panel(
+            include_returns=True,
+            horizons=todo2,
+        )
 
     pbar = tqdm(
         todo2,
@@ -330,7 +340,13 @@ def run_figure2(df, control_cols, fig2_result_path, fig2_progress_path, fig2_out
 
         # 用于回归的变量
         reg_cols = [y_col, "quarterLag1size90plus", "StkcdRecall", "Trddt", "yearQuarter"] + control_cols
-        reg_df = df[reg_cols].dropna().copy()
+        # 逐列检查缺失，保留当前窗口全部必要变量非缺失的行。
+        valid_rows = np.ones(len(df), dtype=bool)
+        for col in reg_cols:
+            valid_rows &= df[col].notna().to_numpy()
+
+        reg_df = df.loc[valid_rows, reg_cols]
+        del valid_rows
 
         # 固定效应
         # “公司×年度季度”组
@@ -390,8 +406,9 @@ def run_figure2(df, control_cols, fig2_result_path, fig2_progress_path, fig2_out
         # 每完成一个窗口，立即保存进度
         save_progress(results, fig2_progress_path, fig2_signature)
 
-        # 释放本窗口回归临时对象，并触发垃圾回收
+        # 释放本窗口回归临时对象和已经保存结果的收益列。
         del reg_df, y, X, absorb, clusters, model, fit, ci
+        del df[y_col]
         gc.collect()
 
     coef_df = pd.DataFrame(results).sort_values("window").reset_index(drop=True)
@@ -438,7 +455,7 @@ def run_figure3(df, control_cols, fig3_result_path, fig3_progress_path, fig3_out
         "yearQuarter",
     ] + control_cols
 
-    pattern_df = df[pattern_cols].copy()
+    pattern_df = df[pattern_cols]
 
     del df
     gc.collect()
@@ -493,10 +510,29 @@ def run_figure3(df, control_cols, fig3_result_path, fig3_progress_path, fig3_out
         lower = fig3_df[col].quantile(0.01)
         upper = fig3_df[col].quantile(0.99)
 
-        fig3_df[f"{col}_w"] = fig3_df[col].clip(
+        # 直接用缩尾值替换原值，避免同时保留两套50列数据。
+        fig3_df[col] = fig3_df[col].clip(
             lower=lower,
             upper=upper,
         )
+
+    # 保留原来回归使用的缩尾变量名。
+    fig3_df.rename(
+        columns={col: f"{col}_w" for col in oib_cols},
+        inplace=True,
+    )
+
+    # 共同变量不随窗口变化，逐列检查一次缺失，避免每轮生成大块缺失标记。
+    common_valid_rows = np.ones(len(fig3_df), dtype=bool)
+    for col in pattern_cols:
+        common_valid_rows &= fig3_df[col].notna().to_numpy()
+
+    # 沿用原来的公司季度字符串标签，只生成一次。
+    fig3_df["firm_yearquarter_fe"] = pd.Categorical(
+        fig3_df["StkcdRecall"].astype(str)
+        + "_"
+        + fig3_df["yearQuarter"].astype(str)
+    )
 
     # 缩尾完成后，再开始保存和运行回归结果
     fig3_results, fig3_signature = load_progress(
@@ -525,12 +561,17 @@ def run_figure3(df, control_cols, fig3_result_path, fig3_progress_path, fig3_out
             "yearQuarter",
         ] + control_cols
 
-        reg_df = fig3_df[reg_cols].dropna().copy()
+        # 与原来对reg_cols删除缺失行相同，保持样本和行顺序。
+        valid_rows = common_valid_rows & fig3_df[y_col].notna().to_numpy()
+        reg_df = fig3_df.loc[
+            valid_rows,
+            reg_cols + ["firm_yearquarter_fe"],
+        ]
+        del valid_rows
 
-        reg_df["firm_yearquarter_fe"] = pd.Categorical(
-            reg_df["StkcdRecall"].astype(str)
-            + "_"
-            + reg_df["yearQuarter"].astype(str)
+        # 只保留本窗口实际出现的类别，与原来逐窗口构造固定效应一致。
+        reg_df["firm_yearquarter_fe"] = (
+            reg_df["firm_yearquarter_fe"].cat.remove_unused_categories()
         )
 
         y = reg_df[y_col]
@@ -575,8 +616,9 @@ def run_figure3(df, control_cols, fig3_result_path, fig3_progress_path, fig3_out
         # 每完成一个窗口，立即保存进度
         save_progress(fig3_results, fig3_progress_path, fig3_signature)
 
-        # 释放本窗口回归临时对象，并触发垃圾回收
+        # 结果保存后，释放临时对象和本窗口已经用完的缩尾列。
         del reg_df, y, X, absorb, clusters, model, fit, ci
+        del fig3_df[y_col]
         gc.collect()
 
     fig3_coef_df = pd.DataFrame(fig3_results).sort_values("window").reset_index(drop=True)
@@ -630,7 +672,6 @@ def main(figure_number: int, *, plot_only: bool | None = None) -> list[Path]:
         return [image_path]
     if figure_number == 2:
         return run_figure2(
-            *load_pattern_panel(include_returns=True),
             result_path, progress_path, image_path,
         )
     return run_figure3(
