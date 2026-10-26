@@ -11,7 +11,7 @@
 共享事件表须保留完整历史和既有字段；记忆矩阵或提示识别规则变化后，
 应先通过原合并流程更新共享事件表，再重建本次分段新闻面板。
 从筛样前日度基础表出发，先按日期合并新闻控制，再按原规则筛样。
-2010年1月1日前使用原主线报刊新闻控制，此后使用数行者网络新闻控制。
+2010年1月1日前使用数行者报刊新闻控制，此后使用数行者网络新闻控制。
 两类来源各自先计算91自然日窗口及交易日变化，再选择所属日期段；
 网络新闻保留2009年历史参与窗口计算，切换时不跨来源计算变化或填补缺失。
 历史提示、公告窗口、公司对排除、缩尾参照范围及基准筛样顺序沿用现有口径；
@@ -38,7 +38,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[4]
 MERGE_DIR = PROJECT_ROOT / "code/04_合并数据"
 NEWSPAPER_NEWS_PATH = PROJECT_ROOT / (
     "中间结果/02_变量构造结果/3报刊新闻_AES_AEV/"
-    "报刊新闻_AES_AEV_真实交易日控制变量.csv"
+    "DATAGO_报刊新闻_AES_AEV_真实交易日控制变量.csv"
 )
 NETWORK_NEWS_PATH = PROJECT_ROOT / (
     "中间结果/02_变量构造结果/3网络新闻_AES_AEV/"
@@ -53,7 +53,7 @@ FULL_CUE_PATH = PROJECT_ROOT / "中间结果/04_合并数据/Full_cue_events_aft
 START_YEAR = 2005
 END_YEAR = 2025
 NEWS_SWITCH_DATE = pd.Timestamp("2010-01-01")
-NEWS_SOURCE_LABEL = "2005—2009年报刊新闻；2010—2025年数行者网络新闻"
+NEWS_SOURCE_LABEL = "2005—2009年数行者报刊新闻；2010—2025年数行者网络新闻"
 # 自身公告已考虑收盘后发布，仅在非交易日映射至下一交易日。
 EVENT_DATE_MODE = "next_if_nontrading"
 

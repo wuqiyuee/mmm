@@ -68,7 +68,8 @@ news_feature_path = root / "中间结果/02_变量构造结果/3报刊新闻_AES
 volume_path = root / "中间结果/02_变量构造结果/2交易行为OIB、Avol/Avol_CSMAR_prep.csv"
 forecast_path = root / "中间结果/02_变量构造结果/5公司公告事件/业绩预告快报控制变量_公告日期口径.csv"
 other_event_path = root / "中间结果/02_变量构造结果/5公司公告事件/专题研究事件控制变量_公告日期口径.csv"
-news_control_path = root / "中间结果/02_变量构造结果/3报刊新闻_AES_AEV/报刊新闻_AES_AEV_真实交易日控制变量.csv"
+# 四个回归控制使用数行者分段新闻；上方历史高新闻覆盖特征仍使用独立来源。
+news_control_path = root / "中间结果/02_变量构造结果/3分段新闻_AES_AEV/DATAGO_分段新闻_真实交易日控制变量.csv"
 adjusted_return_path = root / "中间结果/02_变量构造结果/1DGTW特征调整收益率/DGTW特征调整收益率.csv"
 
 output_dir = root / "中间结果/04_合并数据/心理机制保留缺失"

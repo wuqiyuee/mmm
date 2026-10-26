@@ -69,8 +69,8 @@ def build_full_paths(root):
             "IAR_Rept.csv"
         ),
         "AES_AEV_controls_path": (
-            "中间结果/02_变量构造结果/3报刊新闻_AES_AEV/"
-            "报刊新闻_AES_AEV_真实交易日控制变量.csv"
+            "中间结果/02_变量构造结果/3分段新闻_AES_AEV/"
+            "DATAGO_分段新闻_真实交易日控制变量.csv"
         ),
         "adjusted_return_path": (
             "中间结果/02_变量构造结果/1DGTW特征调整收益率/"
@@ -1842,6 +1842,7 @@ def run_full_pipeline(paths, config, analyst_overlap_root):
         other_event_path=paths["other_event_controls_path"],
     )
 
+    # 数行者分段新闻：2010年前报刊，2010年起网络；在基准筛样前合并。
     daily_panel = merge_full_news_controls(
         daily_panel=daily_panel,
         news_path=paths["AES_AEV_controls_path"],

@@ -172,7 +172,8 @@ industry_path = ROOT / '中间结果/02_变量构造结果/同行业识别/个�
 sue_path = ROOT/'中间结果/02_变量构造结果/4sue/sue.csv'
 SC_NetWorkRelationsIndex_path = ROOT/'input/CSMAR/供应链网络关系指标表2001-12-31至2025-12-31/SC_NetworkRelationsIndex.csv'
 IAR_Rept_path = ROOT/'input/CSMAR/年、中、季报基本情况文件1990-12-31至2026-06-30/IAR_Rept.csv'
-AES_AEV_controls_path = ROOT/'中间结果/02_变量构造结果/3报刊新闻_AES_AEV/报刊新闻_AES_AEV_真实交易日控制变量.csv'
+# 数行者分段新闻：2010年前报刊，2010年起网络。
+AES_AEV_controls_path = ROOT/'中间结果/02_变量构造结果/3分段新闻_AES_AEV/DATAGO_分段新闻_真实交易日控制变量.csv'
 sample_intermediate_out_path = ROOT / "中间结果/04_合并数据/Sample_intermediate_pattern.csv"
 adjusted_return_path = ROOT / "中间结果/02_变量构造结果/1DGTW特征调整收益率/DGTW特征调整收益率.csv"
 output_path = ROOT/'中间结果/04_合并数据/Pattern样本_最终回归面板.csv'

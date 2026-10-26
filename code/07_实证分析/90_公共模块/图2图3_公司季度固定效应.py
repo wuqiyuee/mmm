@@ -657,7 +657,8 @@ def main(figure_number: int, *, plot_only: bool | None = None) -> list[Path]:
     output_dir = ROOT / "图表结果" / "01_主线图表" / task_name
     output_dir.mkdir(parents=True, exist_ok=True)
     result_path = output_dir / f"图{figure_number}_公司季度固定效应_回归结果.csv"
-    progress_path = output_dir / f"图{figure_number}_公司季度固定效应_2005至2025年_逐窗口进度.csv"
+    # 新闻控制来源已切换，使用新进度文件开始估计；后续同口径运行仍可校验并续算。
+    progress_path = output_dir / f"图{figure_number}_公司季度固定效应_数行者分段新闻_2005至2025年_逐窗口进度.csv"
     if figure_number == 2:
         image_path = output_dir / "figure2_收益动态和长期反转.png"
         title = "收益动态和长期反转（公司×年度季度固定效应）"
