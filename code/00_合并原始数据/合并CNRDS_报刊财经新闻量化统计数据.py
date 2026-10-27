@@ -1,16 +1,18 @@
 from pathlib import Path
 import pandas as pd
 
+# 根据脚本位置定位项目根目录，整个项目移动后无需修改路径。
+ROOT = Path(__file__).resolve().parents[2]
+
+
 # CNRDS 报刊财经新闻量化统计原始 Excel 总目录
-base_dir = Path(
-    "/Users/qiyuewu/Desktop/mmm复现数据包/input/CNRDS/上市公司新闻舆情/财经新闻-CFND/报刊财经新闻/CFND_报刊财经新闻量化统计_ALL"
-)
+base_dir = ROOT / 'input/CNRDS/上市公司新闻舆情/财经新闻-CFND/报刊财经新闻/CFND_报刊财经新闻量化统计_ALL'
 
 # 年份范围。1994-1999 用作 2000 年起 91 天滚动窗口的历史回看期。
 years = range(1994, 2026)
 
 # 输出文件
-output_csv = Path('/Users/qiyuewu/Desktop/mmm复现数据包/中间结果/00_合并原始数据/报刊财经新闻量化统计_1994_2025.csv')
+output_csv = ROOT / '中间结果/00_合并原始数据/报刊财经新闻量化统计_1994_2025.csv'
 
 dfs = []
 missing_files = []

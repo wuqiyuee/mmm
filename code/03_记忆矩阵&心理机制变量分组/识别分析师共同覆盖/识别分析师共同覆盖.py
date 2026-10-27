@@ -56,7 +56,7 @@ def get_analyst_set(coverage_by_stock, stkcd, annodt, lookback_days):
 ## 路径设置
 #===============================================================================
 
-ROOT = Path('/Users/qiyuewu/Desktop/mmm复现数据包')
+ROOT = Path(__file__).resolve().parents[3]
 AF_Forecast_path = ROOT / '中间结果/00_合并原始数据/CSMAR_分析师预测指标文件_合并结果.csv'
 
 output_root = ROOT / "中间结果/03_记忆矩阵/分析师共同覆盖"

@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 
-ROOT = Path("/Users/qiyuewu/Desktop/mmm复现数据包")
+ROOT = Path(__file__).resolve().parents[5]
 
 INPUT_PATH = ROOT / "中间结果/00_合并原始数据/CSMAR_公司公告事件表_2002_2025_合并结果.csv"
 CALENDAR_PATH = ROOT / "中间结果/01_清洗后样本/市场交易日历_td.csv"

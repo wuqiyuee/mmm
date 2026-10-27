@@ -40,13 +40,19 @@
 
 import pandas as pd
 
+from pathlib import Path
+
+# 根据脚本位置定位项目根目录，整个项目移动后无需修改路径。
+ROOT = Path(__file__).resolve().parents[4]
+
+
 pd.set_option("display.max_columns", None)
 pd.set_option("display.width", 260)
 pd.set_option("display.max_rows", 300)
 
-NEW_PATH = r"/Users/qiyuewu/Desktop/mmm复现数据包/下载数据/CSMAR/个股日度收益率（升级测试）/CSMAR_日个股回报率(升级测试)_2000_2025.csv"
-CALE_PATH = r"/Users/qiyuewu/Desktop/mmm复现数据包/下载数据/CSMAR/日历文件2000-01-01至2025-12-31/TRD_Cale.csv"
-SUSP_PATH = r"/Users/qiyuewu/Desktop/mmm复现数据包/下载数据/CSMAR/交易停复牌数据表2000-01-01至2025-12-31/TSR_Stkstat_backup.csv"
+NEW_PATH = str(ROOT / '下载数据/CSMAR/个股日度收益率（升级测试）/CSMAR_日个股回报率(升级测试)_2000_2025.csv')
+CALE_PATH = str(ROOT / '下载数据/CSMAR/日历文件2000-01-01至2025-12-31/TRD_Cale.csv')
+SUSP_PATH = str(ROOT / '下载数据/CSMAR/交易停复牌数据表2000-01-01至2025-12-31/TSR_Stkstat_backup.csv')
 
 A_MARKETS = [1, 4, 16, 32]
 

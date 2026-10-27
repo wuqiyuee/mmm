@@ -64,7 +64,7 @@ def dummy_int(s):
 ## 路径设置
 #===============================================================================
 
-ROOT = Path('/Users/qiyuewu/Desktop/mmm复现数据包')
+ROOT = Path(__file__).resolve().parents[3]
 IAR_Rept_path = ROOT/'input/CSMAR/年、中、季报基本情况文件1990-12-31至2026-06-30/IAR_Rept.csv'
 
 output_path = ROOT / "中间结果/03_记忆矩阵/MemoryMatrixFull1.csv"

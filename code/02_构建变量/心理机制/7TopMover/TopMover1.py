@@ -6,7 +6,7 @@ import numpy as np
 ## 路径设置
 # =============================================================================
 
-ROOT = Path('/Users/qiyuewu/Desktop/mmm复现数据包')
+ROOT = Path(__file__).resolve().parents[4]
 TRD_Dalyr_DGTW_path = ROOT / '中间结果/01_清洗后样本/DGTW构建用个股日度面板.csv'
 OUT_DIR = ROOT / '中间结果/02_变量构造结果/7TopMover'
 OUT_DIR.mkdir(parents=True, exist_ok=True)

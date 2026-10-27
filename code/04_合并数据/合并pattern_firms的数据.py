@@ -6,6 +6,10 @@ from dateutil.relativedelta import *
 from pathlib import Path
 import datetime 
 
+# 根据脚本位置定位项目根目录，整个项目移动后无需修改路径。
+ROOT = Path(__file__).resolve().parents[2]
+
+
 #pd.set_option('display.max_columns', None)
 #pd.set_option('display.width', None)
 #pd.set_option('display.max_colwidth', None)
@@ -3154,7 +3158,7 @@ def save_pattern_final_sample(daily_panel, output_path):
 
 
 def main(
-    root="/Users/qiyuewu/Desktop/mmm复现数据包",
+    root=str(ROOT),
     *,
     sue_denominator_mode="nonmissing_sue",
     drop_analyst_overlap=True,

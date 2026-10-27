@@ -3,7 +3,7 @@ from pathlib import Path
 import gc
 
 
-ROOT = Path('/Users/qiyuewu/Desktop/mmm复现数据包')
+ROOT = Path(__file__).resolve().parents[2]
 
 # 基础路径：直接指向“个股日度收益率（升级测试）”
 base_dir = ROOT/'input/CSMAR/个股日度收益率（升级测试）1995-01-01至于1999-12-31'

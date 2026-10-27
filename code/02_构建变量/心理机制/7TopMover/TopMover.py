@@ -12,7 +12,7 @@ pd.set_option("display.max_colwidth", None)
 # 路径设置
 # =============================================================================
 
-ROOT = Path("/Users/qiyuewu/Desktop/mmm复现数据包")
+ROOT = Path(__file__).resolve().parents[4]
 
 # 公司文件用于识别股票所属市场，避免把 B 股或北交所股票混入沪深 A 股样本。
 TRD_CO_FILE = ROOT / "input/CSMAR/公司文件(1990-12-10至2026-08-21)/TRD_Co.csv"

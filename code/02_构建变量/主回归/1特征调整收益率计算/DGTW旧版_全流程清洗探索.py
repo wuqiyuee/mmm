@@ -38,6 +38,12 @@ import matplotlib.pyplot as plt
 from dateutil.relativedelta import * 
 from pandas.tseries.offsets import * 
 import warnings
+
+from pathlib import Path
+
+# 根据脚本位置定位项目根目录，整个项目移动后无需修改路径。
+ROOT = Path(__file__).resolve().parents[4]
+
 warnings.filterwarnings('ignore') 
 pd.options.mode.chained_assignment = None 
 import logging
@@ -54,7 +60,7 @@ EXPORT_SAMPLE_KEY=True
 
 #读取日度股价的数据，用于提取市值并排名、计算动量(填充了停牌和暂停上市的数据)
 TRD_Dalyr = pd.read_csv(
-'/Users/qiyuewu/Desktop/mmm复现数据包/下载数据/CSMAR/个股日度收益率（升级测试）/CSMAR_日个股回报率(升级测试)_2000_2025.csv',
+str(ROOT / '下载数据/CSMAR/个股日度收益率（升级测试）/CSMAR_日个股回报率(升级测试)_2000_2025.csv'),
     encoding='utf-8')
 
 TRD_Dalyr = TRD_Dalyr.loc[
@@ -92,7 +98,7 @@ TRD_Dalyr=TRD_Dalyr[['Stkcd','Trddt','jdate','sizew','size','ret','Trdsta','Mark
 # 中上协官网的《指引》附则明确写的是：“于2023年5月1日施行。”
 
 industry = pd.read_csv(
-    '/Users/qiyuewu/Desktop/mmm复现数据包/下载数据/CSMAR/上市公司行业分类表/STK_INDUSTRYCLASS.csv',
+    str(ROOT / '下载数据/CSMAR/上市公司行业分类表/STK_INDUSTRYCLASS.csv'),
     encoding='utf-8'
 )
 
@@ -190,7 +196,7 @@ print(f"已从日度收益文件中按当期行业剔除金融股，样本从{or
 TRD_Dalyr1 = TRD_Dalyr1.drop(columns=['std_id', 'ImplementDate', 'is_fin']).copy()
 
 TRD_Co=pd.read_csv(
-    '/Users/qiyuewu/Desktop/mmm复现数据包/下载数据/CSMAR/公司文件/TRD_Co.csv',
+    str(ROOT / '下载数据/CSMAR/公司文件/TRD_Co.csv'),
     encoding='utf-8'
 )
 
@@ -214,7 +220,7 @@ print(f'删除上市不满一年观测值共：{len(TRD_Dalyr1)-len(TRD_Dalyr2)}
 ################ 1. 日度底表：算基础变量、生成动量可靠或者可得的两个信号################
 ################################################################################
 TRD_Cale=pd.read_csv(
-    '/Users/qiyuewu/Desktop/mmm复现数据包/下载数据/CSMAR/日历文件2000-01-01至2025-12-31/TRD_Cale.csv',
+    str(ROOT / '下载数据/CSMAR/日历文件2000-01-01至2025-12-31/TRD_Cale.csv'),
     encoding='utf-8'
 )
 
@@ -470,7 +476,7 @@ TRD_Mnth_6['Connect_year'] = TRD_Mnth_6['jdate'].dt.year - 1
 
 # 读取资产负债表，计算上年12月末账面价值
 FS_Combas = pd.read_csv(
-    '/Users/qiyuewu/Desktop/mmm复现数据包/下载数据/CSMAR/资产负债表2000-01-01至2025-12-31/FS_Combas.csv',
+    str(ROOT / '下载数据/CSMAR/资产负债表2000-01-01至2025-12-31/FS_Combas.csv'),
     encoding='utf-8'
 )
 
@@ -1214,13 +1220,12 @@ print("=" * 80)
 ########################### 9. 导出最终样本键 #####################################
 ################################################################################
 
-from pathlib import Path
 
 if EXPORT_SAMPLE_KEY:
     sample_key = final_reg[['Stkcd', 'Trddt']].drop_duplicates().copy()
     sample_key['Stkcd'] = sample_key['Stkcd'].astype(str).str.zfill(6)
 
-    sample_out = Path(r"/Users/qiyuewu/Desktop/mmm复现数据包/中间结果/DGTW_final_sample.csv")
+    sample_out = ROOT / '中间结果/DGTW_final_sample.csv'
     sample_out.parent.mkdir(parents=True, exist_ok=True)
     sample_key.to_csv(sample_out, index=False, encoding="utf-8-sig")
 

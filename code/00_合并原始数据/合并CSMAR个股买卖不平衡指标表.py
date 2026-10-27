@@ -3,8 +3,14 @@ import glob
 import os
 import gc
 
+from pathlib import Path
+
+# 根据脚本位置定位项目根目录，整个项目移动后无需修改路径。
+ROOT = Path(__file__).resolve().parents[2]
+
+
 # 基础路径
-base_dir = '/Users/qiyuewu/Desktop/mmm复现数据包/input/CSMAR/个股买卖不平衡指标表（日）2003-01-02至2026-08-31'
+base_dir = str(ROOT / 'input/CSMAR/个股买卖不平衡指标表（日）2003-01-02至2026-08-31')
 
 # 存储所有子文件夹合并后的 DataFrame
 all_dfs = []
@@ -77,7 +83,7 @@ except NameError:
 gc.collect()
 
 # 导出合并结果
-output_path ='/Users/qiyuewu/Desktop/mmm复现数据包/中间结果/00_合并原始数据/CSMAR_个股买卖不平衡指标表_日_合并结果.csv'
+output_path =str(ROOT / '中间结果/00_合并原始数据/CSMAR_个股买卖不平衡指标表_日_合并结果.csv')
 print(f"💾 正在保存合并后的文件到: {output_path}")
 df_total.to_csv(output_path, index=False, encoding='utf-8-sig')
 print("🏁 CSV 文件保存完毕！")

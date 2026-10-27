@@ -1,7 +1,7 @@
 import pandas as pd
 from pathlib import Path
 
-ROOT = Path("/Users/qiyuewu/Desktop/mmm复现数据包")
+ROOT = Path(__file__).resolve().parents[3]
 
 ownership_path = (
     ROOT

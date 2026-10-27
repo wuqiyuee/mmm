@@ -12,7 +12,7 @@ import pandas as pd
 import requests
 
 
-ROOT = Path("/Users/qiyuewu/Desktop/mmm复现数据包")
+ROOT = Path(__file__).resolve().parents[1]
 CSMAR_PATH = ROOT / "中间结果/00_合并原始数据/CSMAR_公司公告事件表_2002_2025_合并结果.csv"
 OUTPUT_PATH = ROOT / "巨潮业绩预告与业绩快报发布时间数据/csmar公告编号_巨潮时间戳匹配结果.csv"
 

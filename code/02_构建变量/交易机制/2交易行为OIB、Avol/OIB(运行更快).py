@@ -71,7 +71,7 @@ pd.set_option('display.max_columns', None)
 pd.set_option('display.width', None)
 pd.set_option('display.max_colwidth', None)
 
-ROOT = Path('/Users/qiyuewu/Desktop/mmm复现数据包')
+ROOT = Path(__file__).resolve().parents[4]
 
 HF_BSImbalance_file = ROOT / '中间结果/00_合并原始数据/CSMAR_个股买卖不平衡指标表_日_合并结果.csv'
 TRD_Dalyr_file = ROOT / '中间结果/00_合并原始数据/CSMAR_日个股回报率(升级测试)_1995_2026.csv'

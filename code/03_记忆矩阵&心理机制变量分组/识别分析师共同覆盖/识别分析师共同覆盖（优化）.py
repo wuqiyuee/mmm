@@ -76,13 +76,11 @@ def resolve_project_root(root: str | Path | None) -> Path:
     """
     获取项目根目录。
 
-    如果不传 --root，则默认使用当前运行目录。
-    因此有两种推荐运行方式：
-        1. cd 到 mmm复现数据包 后运行 python 本脚本.py；
-        2. 在任意目录运行 python 本脚本.py --root "/你的/mmm复现数据包路径"。
+    如果不传 --root，则根据本脚本位置定位项目根目录。
+    也可在任意目录运行本脚本，并通过 --root "/你的/mmm复现数据包路径" 指定根目录。
     """
     if root is None:
-        return Path.cwd().resolve()
+        return Path(__file__).resolve().parents[3]
 
     return Path(root).expanduser().resolve()
 
@@ -999,8 +997,8 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help=(
-            "项目根目录，例如：/Users/qiyuewu/Desktop/mmm复现数据包。"
-            "如果不填，则默认使用当前运行目录。"
+            "项目根目录，例如：/Volumes/苹果资料/mmm复现数据包。"
+            "如果不填，则根据本脚本位置定位项目根目录。"
         ),
     )
 

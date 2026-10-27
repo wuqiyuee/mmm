@@ -8,6 +8,10 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
+# 根据脚本位置定位项目根目录，整个项目移动后无需修改路径。
+ROOT = Path(__file__).resolve().parents[4]
+
+
 pd.set_option('display.max_columns', None)
 pd.set_option('display.width', None)
 pd.set_option('display.max_colwidth', None)
@@ -56,44 +60,18 @@ if SUE3_PRIMARY_WINDOW not in FORECAST_WINDOWS:
 
 
 ### 路径
-FORECAST_PATH = Path(
-    '/Users/qiyuewu/Desktop/mmm复现数据包/'
-    '中间结果/00_合并原始数据/'
-    'CSMAR_分析师预测指标文件_合并结果.csv'
-)
+FORECAST_PATH = ROOT / '中间结果/00_合并原始数据/CSMAR_分析师预测指标文件_合并结果.csv'
 
-REPORT_PATH = Path(
-    '/Users/qiyuewu/Desktop/mmm复现数据包/'
-    'input/CSMAR/'
-    '年、中、季报基本情况文件1990-12-31至2026-06-30/'
-    'IAR_Rept.csv'
-)
-TRADING_CALENDAR_PATH = Path(
-    '/Users/qiyuewu/Desktop/mmm复现数据包/'
-    'input/CSMAR/'
-    '日历文件(1990-12-19至2026-08-20)/'
-    'CER_Cale.csv'
-)
+REPORT_PATH = ROOT / 'input/CSMAR/年、中、季报基本情况文件1990-12-31至2026-06-30/IAR_Rept.csv'
+TRADING_CALENDAR_PATH = ROOT / 'input/CSMAR/日历文件(1990-12-19至2026-08-20)/CER_Cale.csv'
 
-TOTAL_SHARE_PATH = Path (
-    '/Users/qiyuewu/Desktop/mmm复现数据包/'
-    '中间结果/00_合并原始数据/'
-    'CSMAR_股票历史日行情信息表_前复权_1996_2025_合并结果.csv'
-)
+TOTAL_SHARE_PATH = ROOT / '中间结果/00_合并原始数据/CSMAR_股票历史日行情信息表_前复权_1996_2025_合并结果.csv'
 
 
-PRICE_PATH = Path(
-    '/Users/qiyuewu/Desktop/mmm复现数据包/'
-    '中间结果/00_合并原始数据/'
-    'CSMAR_日个股回报率(升级测试)_1995_2026.csv'
-)
+PRICE_PATH = ROOT / '中间结果/00_合并原始数据/CSMAR_日个股回报率(升级测试)_1995_2026.csv'
 
 
-OUTPUT_PATH = Path(
-    '/Users/qiyuewu/Desktop/mmm复现数据包/'
-    '中间结果/02_变量构造结果/'
-    '4sue/sue.csv'
-)
+OUTPUT_PATH = ROOT / '中间结果/02_变量构造结果/4sue/sue.csv'
 
 
 def normalize_stock_code(x:object) -> str:

@@ -162,7 +162,7 @@ def calculate_sue_cue_averages(collapsed, denominator_mode):
 ## 路径设置
 # =============================================================================
 
-ROOT = Path('/Users/qiyuewu/Desktop/mmm复现数据包')
+ROOT = Path(__file__).resolve().parents[2]
 
 MemoryMatrixPattern_path = ROOT / '中间结果/03_记忆矩阵/MemoryMatrixPattern(交易变量用公告后首个交易日).csv'
 TRD_Cale_td_path = ROOT / '中间结果/01_清洗后样本/市场交易日历_td.csv'

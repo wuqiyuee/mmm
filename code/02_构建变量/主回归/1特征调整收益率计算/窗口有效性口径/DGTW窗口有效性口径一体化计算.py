@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 
-ROOT = Path("/Users/qiyuewu/Desktop/mmm复现数据包")
+ROOT = Path(__file__).resolve().parents[5]
 
 base_sample_index_path = ROOT / "中间结果/01_清洗后样本/基础清洗后个股日度样本索引_td.csv"
 daily_variable_panel_path = ROOT / "中间结果/01_清洗后样本/DGTW构建用个股日度面板.csv"

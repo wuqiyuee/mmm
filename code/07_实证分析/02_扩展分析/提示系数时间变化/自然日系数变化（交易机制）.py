@@ -23,7 +23,7 @@ import matplotlib.dates as mdates
 # 一、参数区：以后主要修改这里
 # ============================================================
 
-root = Path("/Users/qiyuewu/Desktop/mmm复现数据包")
+root = Path(__file__).resolve().parents[4]
 input_path = root / "中间结果/04_合并数据/Pattern样本_最终回归面板.csv"
 oib_path = root / "中间结果/02_变量构造结果/2交易行为OIB、Avol/OIB_CSMAR_prep.csv"
 image_dir = root / "图表结果/02_扩展分析/提示系数时间变化"

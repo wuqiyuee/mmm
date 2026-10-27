@@ -5,6 +5,12 @@ import matplotlib.pyplot as plt
 from dateutil.relativedelta import * 
 from pandas.tseries.offsets import * 
 import warnings
+
+from pathlib import Path
+
+# 根据脚本位置定位项目根目录，整个项目移动后无需修改路径。
+ROOT = Path(__file__).resolve().parents[4]
+
 warnings.filterwarnings('ignore') 
 pd.options.mode.chained_assignment = None 
 import logging
@@ -17,7 +23,7 @@ pd.set_option('display.width', 1000)
 
 # 读取月度收益文件用于提取市值和计算动量
 TRD_Mnth=pd.read_csv(
-    '/Users/qiyuewu/Desktop/mmm复现数据包/input/CSMAR/月个股回报率文件2000-01至2025-12/TRD_Mnth.csv',
+    str(ROOT / 'input/CSMAR/月个股回报率文件2000-01至2025-12/TRD_Mnth.csv'),
     encoding='utf-8'
 )
 TRD_Mnth=TRD_Mnth.loc[TRD_Mnth['Markettype'].isin([1,4,16,32])]
@@ -57,7 +63,7 @@ mom_yearly=mom_yearly[(mom_yearly['valid_months']>=6)
 
 #读取资产负债表，计算账面市值比
 comp=pd.read_csv(
-    '/Users/qiyuewu/Desktop/mmm复现数据包/input/CSMAR/资产负债表2000-01-01至2025-12-31/FS_Combas.csv',
+    str(ROOT / 'input/CSMAR/资产负债表2000-01-01至2025-12-31/FS_Combas.csv'),
     encoding='utf-8'
 )
 comp['Accper']=pd.to_datetime(comp['Accper'])
@@ -103,7 +109,7 @@ comp1=comp1.loc[comp1['BtM']>0]
 # 按最终样本清洗脚本的口径：根据年报截止日选择当期行业分类标准，
 # 再匹配该标准下已实施的最近一次行业代码。
 industry=pd.read_csv(
-    '/Users/qiyuewu/Desktop/mmm复现数据包/input/CSMAR/上市公司行业分类表/STK_INDUSTRYCLASS.csv',
+    str(ROOT / 'input/CSMAR/上市公司行业分类表/STK_INDUSTRYCLASS.csv'),
     encoding='utf-8'
 )
 
@@ -375,15 +381,15 @@ TRD_Mnth7=TRD_Mnth7.drop(columns=['Connect_year','form_year'])
 
 ####检验模块
 csmar_assign=pd.read_csv(
-    '/Users/qiyuewu/Desktop/mmm复现数据包/input/CSMAR/DGTW/DGTW股票分配表/STK_MKT_DGTWASSINGMENTS.csv',
+    str(ROOT / 'input/CSMAR/DGTW/DGTW股票分配表/STK_MKT_DGTWASSINGMENTS.csv'),
     encoding='utf-8'
 )
 csmar_bench=pd.read_csv(
-    '/Users/qiyuewu/Desktop/mmm复现数据包/input/CSMAR/DGTW/DGTW特征基准指标/STK_MKT_DGTWBENCH.csv',
+    str(ROOT / 'input/CSMAR/DGTW/DGTW特征基准指标/STK_MKT_DGTWBENCH.csv'),
     encoding='utf-8'
 )
 csmar_breakpoints=pd.read_csv(
-    '/Users/qiyuewu/Desktop/mmm复现数据包/input/CSMAR/DGTW/DGTW分位数表2000至2025/STK_MKT_DGTWBREAKPOINTS.csv',
+    str(ROOT / 'input/CSMAR/DGTW/DGTW分位数表2000至2025/STK_MKT_DGTWBREAKPOINTS.csv'),
     encoding='utf-8'
 )
 

@@ -19,7 +19,7 @@ pd.set_option('display.max_columns', None)
 pd.set_option('display.expand_frame_repr', False)#不自动转行
 pd.set_option('display.width', 1000)#设置很长的虚拟宽度
 
-ROOT = Path('/Users/qiyuewu/Desktop/mmm复现数据包')
+ROOT = Path(__file__).resolve().parents[4]
 
 td_path = ROOT/ '中间结果/01_清洗后样本/基础清洗后个股日度样本索引_td.csv'  # 对样本进行了清洗并标号
 TRD_Dalyr_DGTW_path = ROOT/ '中间结果/01_清洗后样本/DGTW构建用个股日度面板.csv' # 清洗了的用于构建标签的样本

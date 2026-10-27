@@ -18,7 +18,7 @@ plt.rcParams["axes.unicode_minus"] = False
 # 路径设置
 #===============================================================================
 
-ROOT = Path("/Users/qiyuewu/Desktop/mmm复现数据包")
+ROOT = Path(__file__).resolve().parents[4]
 TABLE_IMAGE_DIR = (
     ROOT
     / "图表结果/论文复现/表格"
@@ -1410,9 +1410,7 @@ from linearmodels.iv import AbsorbingLS
 # 路径
 # =============================================================================
 
-ROOT = Path(
-    "/Users/qiyuewu/Desktop/mmm复现数据包"
-)
+ROOT = Path(__file__).resolve().parents[4]
 
 PATTERN_PATH = (
     ROOT

@@ -2,7 +2,7 @@ from pathlib import Path  # 路径处理工具
 import pandas as pd      # 数据处理库
 
 # 1. 项目根目录
-root = Path("/Users/qiyuewu/Desktop/mmm复现数据包")
+root = Path(__file__).resolve().parents[2]
 
 # 2. 业绩预告数据目录
 data_dir = root / "input" / "CSMAR" / "业绩预告&业绩快报"
@@ -2382,8 +2382,7 @@ print(
 
 # 142. 读取当日特征调整收益率
 dgtw_path = (
-    "/Users/qiyuewu/Desktop/mmm复现数据包/中间结果/"
-    "02_变量构造结果/1DGTW特征调整收益率/DGTW特征调整收益率.csv"
+    str(root / '中间结果/02_变量构造结果/1DGTW特征调整收益率/DGTW特征调整收益率.csv')
 )
 
 dgtw_daily = pd.read_csv(

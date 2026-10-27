@@ -6,7 +6,7 @@ pd.set_option('display.max_columns', None)
 pd.set_option('display.width', None)
 pd.set_option('display.max_colwidth', None)
 
-ROOT = Path('/Users/qiyuewu/Desktop/mmm复现数据包')
+ROOT = Path(__file__).resolve().parents[1]
 
 _file = ROOT 
 td_file = ROOT 
@@ -87,7 +87,7 @@ def merge_csv_folder(
     date_cols=None,
     add_source=True,
     output_name=None,
-    output_dir="/Users/qiyuewu/Desktop/mmm复现数据包/中间结果/00_合并原始数据",
+    output_dir=str(ROOT / '中间结果/00_合并原始数据'),
     save=True,
     save_format="csv",
     **read_csv_kwargs

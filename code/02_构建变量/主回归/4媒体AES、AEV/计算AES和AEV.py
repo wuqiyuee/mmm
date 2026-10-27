@@ -20,17 +20,15 @@ from typing import Iterable # Iterable 通常只是类型提示，不负责真�
 import numpy as np
 import pandas as pd
 
-DEFAULT_INPUT = Path(
-    "/Users/qiyuewu/Desktop/mmm复现数据包/"
-    "中间结果/00_合并原始数据/报刊财经新闻量化统计_1994_2025.csv"
-)
+# 根据脚本位置定位项目根目录，整个项目移动后无需修改路径。
+ROOT = Path(__file__).resolve().parents[4]
+
+
+DEFAULT_INPUT = ROOT / '中间结果/00_合并原始数据/报刊财经新闻量化统计_1994_2025.csv'
 
 
 
-AES_AEV_DIR = Path(
-    "/Users/qiyuewu/Desktop/mmm复现数据包/"
-    "中间结果/02_变量构造结果/3报刊新闻_AES_AEV"
-)
+AES_AEV_DIR = ROOT / '中间结果/02_变量构造结果/3报刊新闻_AES_AEV'
 # 自然日 AES、AEV 输出，继续供记忆矩阵使用
 DEFAULT_OUTPUT = AES_AEV_DIR / "报刊新闻_AES_AEV.csv"
 
@@ -40,11 +38,7 @@ DEFAULT_CONTROLS_OUTPUT = (
 )
 
 # 用来识别个股真实交易日
-DEFAULT_STOCK_DAILY_INPUT = Path(
-    "/Users/qiyuewu/Desktop/mmm复现数据包/"
-    "中间结果/00_合并原始数据/"
-    "CSMAR_日个股回报率(升级测试)_1995_2026.csv"
-)
+DEFAULT_STOCK_DAILY_INPUT = ROOT / '中间结果/00_合并原始数据/CSMAR_日个股回报率(升级测试)_1995_2026.csv'
 
 
 

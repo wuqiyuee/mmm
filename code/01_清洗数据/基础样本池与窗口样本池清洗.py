@@ -60,10 +60,6 @@ def find_project_root() -> Path:
         if (directory / "code").is_dir() and (directory / "input").is_dir():
             return directory
 
-    fallback = Path("/Users/qiyuewu/Desktop/mmm复现数据包")
-    if (fallback / "code").is_dir() and (fallback / "input").is_dir():
-        return fallback
-
     raise FileNotFoundError("无法找到同时包含 code 和 input 文件夹的项目根目录。")
 
 

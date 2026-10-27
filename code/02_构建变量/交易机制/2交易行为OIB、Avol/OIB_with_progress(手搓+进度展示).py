@@ -42,7 +42,7 @@ def print_loop_progress(label, current, total):
         print_progress(f"{label}: {current}/{total} ({current / total:.0%})")
 
 
-ROOT = Path('/Users/qiyuewu/Desktop/mmm复现数据包')
+ROOT = Path(__file__).resolve().parents[4]
 HF_BSImbalance_file = ROOT / '中间结果/00_合并原始数据/CSMAR_个股买卖不平衡指标表_日_合并结果.csv'
 td_file = ROOT / '中间结果/01_清洗后样本/基础清洗后个股日度样本索引_td.csv'
 
@@ -421,7 +421,7 @@ print_progress("开始输出 CSV 文件")
 print("正在输出....")
 
 HF_BSImbalance_td.to_csv(
-    '/Users/qiyuewu/Desktop/mmm复现数据包/中间结果/OIB_CSMAR_prep.csv',
+    str(ROOT / '中间结果/OIB_CSMAR_prep.csv'),
     index=False,
    encoding='utf-8-sig'
 )

@@ -21,7 +21,7 @@
 
 运行示例：
 python Full_encapsulated.py
-python Full_encapsulated.py --root "/Users/qiyuewu/Desktop/mmm复现数据包"
+python Full_encapsulated.py --root "/Volumes/苹果资料/mmm复现数据包"
 """
 
 from __future__ import annotations
@@ -561,7 +561,7 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help=(
-            "项目根目录，例如：/Users/qiyuewu/Desktop/mmm复现数据包。"
+            "项目根目录，例如：/Volumes/苹果资料/mmm复现数据包。"
             "默认自动寻找包含 input/ 的目录。"
         ),
     )

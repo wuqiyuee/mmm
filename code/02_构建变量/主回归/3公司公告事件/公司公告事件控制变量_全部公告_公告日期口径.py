@@ -35,7 +35,7 @@ import numpy as np
 import pandas as pd
 
 
-ROOT = Path("/Users/qiyuewu/Desktop/mmm复现数据包")
+ROOT = Path(__file__).resolve().parents[4]
 
 INPUT_PATH = (
     ROOT

@@ -60,7 +60,7 @@ import pandas as pd
 # 路径和输出设置
 # ============================================================================
 
-ROOT = Path("/Users/qiyuewu/Desktop/mmm复现数据包")
+ROOT = Path(__file__).resolve().parents[4]
 DATA_DIR = ROOT / "input/CSMAR/业绩预告&业绩快报"
 CALENDAR_PATH = ROOT / "中间结果/01_清洗后样本/市场交易日历_td.csv"
 OUTPUT_DIR = ROOT / "中间结果/02_变量构造结果/5公司公告事件"

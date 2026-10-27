@@ -86,6 +86,7 @@ def variable_label(variable: str) -> str:
     """把结果文件中的变量名转换为表格中的中文名称。"""
     fixed_labels = {
         "quarterLag1size90plus": "线索事件",
+        "quarterLag1HS300": "沪深300提示",
         "ownEA": "自身盈余公告 [t]",
         "ownOtherEventER": "其他专题事件 [t]",
         "ownPerformanceForecastBrief": "业绩预告或快报 [t]",
@@ -474,12 +475,21 @@ def table2_setting_values(model_rows: Sequence[pd.Series], setting: str) -> list
     return values
 
 
-def draw_table2_compact(summary: pd.DataFrame, output_path: Path) -> None:
+def draw_table2_compact(
+    summary: pd.DataFrame,
+    output_path: Path,
+    *,
+    notes: Sequence[str] | None = None,
+) -> None:
     """绘制表2紧凑版：只展示线索系数和模型设定。"""
     rows = []
-    for sample in ["pattern", "full"]:
+    samples = summary["样本"].drop_duplicates().tolist()
+    if not samples:
+        raise ValueError("表2模型汇总为空，无法绘制紧凑表。")
+    for sample in samples:
         model_rows = table2_model_rows(summary, sample)
         sample_label = str(model_rows[0]["样本说明"])
+        cue_variable = str(model_rows[0].get("提示变量", "quarterLag1size90plus"))
         coefficients = []
         standard_errors = []
         for model_row in model_rows:
@@ -502,7 +512,7 @@ def draw_table2_compact(summary: pd.DataFrame, output_path: Path) -> None:
                 },
                 {
                     "kind": "coefficient",
-                    "label": "线索事件",
+                    "label": variable_label(cue_variable),
                     "values": coefficients,
                     "bold": True,
                 },
@@ -559,7 +569,7 @@ def draw_table2_compact(summary: pd.DataFrame, output_path: Path) -> None:
         ],
         column_labels=SPEC_ORDER + SPEC_ORDER,
         rows=rows,
-        notes=[
+        notes=list(notes) if notes is not None else [
             "注：括号内为按被提示公司和交易日期双向聚类的标准误。",
             "*、**、*** 分别表示在 10%、5% 和 1% 水平上显著。",
         ],
@@ -642,7 +652,7 @@ def _table2_full_coefficient_rows(
                     "kind": "coefficient",
                     "label": variable_label(variable),
                     "values": coefficient_values,
-                    "bold": variable == "quarterLag1size90plus",
+                    "bold": variable in {"quarterLag1size90plus", "quarterLag1HS300"},
                     "line_before": variable == "ownEA_tm10",
                 },
                 {
@@ -787,6 +797,7 @@ def draw_table2_full_two_pages(
     first_page_output: Path,
     second_page_output: Path,
     pdf_output: Path | None,
+    notes: Sequence[str] | None = None,
 ) -> None:
     """将表2完整系数版按原文断点导出为两张图片及可选两页 PDF。"""
     model_rows = table2_model_rows(summary, sample)
@@ -805,7 +816,7 @@ def draw_table2_full_two_pages(
             output_path=first_page_output,
             table_number="表 2",
             include_model_stats=False,
-            notes=["续见下一页。"],
+            notes=[*notes, "续见下一页。"] if notes is not None else ["续见下一页。"],
             width=A4_LANDSCAPE_WIDTH_IN,
             height=A4_LANDSCAPE_HEIGHT_IN,
             label_right=0.205,
@@ -820,7 +831,7 @@ def draw_table2_full_two_pages(
             output_path=second_page_output,
             table_number="表 2（续）",
             include_model_stats=True,
-            notes=[
+            notes=list(notes) if notes is not None else [
                 "注：空白单元格表示相应规格未纳入该控制变量；括号内为按被提示公司和交易日期双向聚类的标准误。",
                 "*、**、*** 分别表示在 10%、5% 和 1% 水平上显著。",
             ],

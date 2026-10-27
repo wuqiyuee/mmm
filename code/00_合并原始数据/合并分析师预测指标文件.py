@@ -3,6 +3,10 @@ from pathlib import Path
 
 import pandas as pd
 
+# 根据脚本位置定位项目根目录，整个项目移动后无需修改路径。
+ROOT = Path(__file__).resolve().parents[2]
+
+
 try:
     from tqdm import tqdm
 except ModuleNotFoundError:
@@ -24,12 +28,10 @@ except ModuleNotFoundError:
 
 
 # 基础路径：CSMAR 分时间段下载的分析师预测指标文件
-base_dir = Path(
-    r"/Users/qiyuewu/Desktop/mmm复现数据包/input/CSMAR/分析师预测指标文件（2001-01-01至2025-12-31）"
-)
+base_dir = ROOT / 'input/CSMAR/分析师预测指标文件（2001-01-01至2025-12-31）'
 
 # 合并后的输出文件放在中间结果文件夹下
-output_path = '/Users/qiyuewu/Desktop/mmm复现数据包/中间结果/00_合并原始数据/CSMAR_分析师预测指标文件_合并结果.csv'
+output_path = str(ROOT / '中间结果/00_合并原始数据/CSMAR_分析师预测指标文件_合并结果.csv')
 
 # 只读取子文件夹中的 CSV，避免把根目录下已经生成的合并结果再次读进去
 csv_files = sorted(

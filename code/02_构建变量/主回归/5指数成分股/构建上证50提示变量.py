@@ -44,7 +44,7 @@ import pandas as pd
 
 
 # 第一部分：路径和研究期。默认不覆盖已存在的结果。
-ROOT = Path("/Users/qiyuewu/Desktop/mmm复现数据包")
+ROOT = Path(__file__).resolve().parents[4]
 FILTER_SCRIPT = ROOT / "code/04_合并数据/合并pattern_firms的数据.py"
 MATRIX_PATH = ROOT / "中间结果/03_记忆矩阵/MemoryMatrixPattern(交易变量用公告后首个交易日).csv"
 CALENDAR_PATH = ROOT / "中间结果/01_清洗后样本/市场交易日历_td.csv"

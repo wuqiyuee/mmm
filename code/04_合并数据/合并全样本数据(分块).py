@@ -3,6 +3,10 @@ import numpy as np
 import gc
 from dateutil.relativedelta import * 
 from pathlib import Path
+
+# 根据脚本位置定位项目根目录，整个项目移动后无需修改路径。
+ROOT = Path(__file__).resolve().parents[2]
+
 try:
     from tqdm import tqdm
 except ImportError:
@@ -1889,7 +1893,7 @@ def run_full_pipeline(paths, config, analyst_overlap_root):
 
 
 def main(
-    root="/Users/qiyuewu/Desktop/mmm复现数据包",
+    root=str(ROOT),
     *,
     drop_analyst_overlap=True,
     analyst_id_mode="split",

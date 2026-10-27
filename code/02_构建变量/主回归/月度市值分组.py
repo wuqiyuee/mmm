@@ -6,7 +6,7 @@ pd.set_option('display.max_columns', None)
 pd.set_option('display.width', None)
 pd.set_option('display.max_colwidth', None)
 
-ROOT = Path('/Users/qiyuewu/Desktop/mmm复现数据包')
+ROOT = Path(__file__).resolve().parents[3]
 
 TRD_Mnth_file = ROOT/'input/CSMAR/月个股回报率文件2000-01至2025-12/TRD_Mnth.csv'
 out_file = ROOT/'中间结果/02_变量构造结果/8月度市值分组/月度市值分组.csv'

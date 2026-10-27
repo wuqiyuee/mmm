@@ -5,6 +5,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+# 根据脚本位置定位项目根目录，整个项目移动后无需修改路径。
+ROOT = Path(__file__).resolve().parents[2]
+
+
 #===============================================================================
 # 路径设置
 #===============================================================================
@@ -673,4 +677,4 @@ def main(root_dir):
 
 # 直接运行本脚本时，启动整个流程
 if __name__ == "__main__":
-    main("/Users/qiyuewu/Desktop/mmm复现数据包")
+    main(str(ROOT))

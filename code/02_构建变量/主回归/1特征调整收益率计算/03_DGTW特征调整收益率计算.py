@@ -11,7 +11,7 @@ import pandas as pd
 本脚本只负责最后一步：把个股原始收益减去同日同 DGTW 组合的基准收益。
 DGTW 组合标签和组合基准收益已经由 01、02 两个脚本提前算好。
 """
-ROOT = Path("/Users/qiyuewu/Desktop/mmm复现数据包")
+ROOT = Path(__file__).resolve().parents[4]
 
 base_sample_index_path = ROOT / "中间结果/01_清洗后样本/基础清洗后个股日度样本索引_td.csv"
 daily_variable_panel_path = ROOT / "中间结果/01_清洗后样本/DGTW构建用个股日度面板.csv"

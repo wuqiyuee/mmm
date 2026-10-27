@@ -3,6 +3,10 @@ from pathlib import Path
 
 import pandas as pd
 
+# 根据脚本位置定位项目根目录，整个项目移动后无需修改路径。
+ROOT = Path(__file__).resolve().parents[2]
+
+
 try:
     from tqdm import tqdm
 except ModuleNotFoundError:
@@ -23,13 +27,9 @@ except ModuleNotFoundError:
             print(f"{self.desc}: {self.current}/{self.total} {self.unit} - {text}", flush=True)
 
 
-base_dir = Path(
-    r"/Users/qiyuewu/Desktop/mmm复现数据包/input/CSMAR/市场交易异常波动表(龙虎榜)2002-08-02至2026-05-25"
-)
+base_dir = ROOT / 'input/CSMAR/市场交易异常波动表(龙虎榜)2002-08-02至2026-05-25'
 
-output_path = Path(
-    r"/Users/qiyuewu/Desktop/mmm复现数据包/中间结果/00_合并原始数据/CSMAR_市场交易异常波动表_龙虎榜_2002-08-02_2026-05-25_合并结果.csv"
-)
+output_path = ROOT / '中间结果/00_合并原始数据/CSMAR_市场交易异常波动表_龙虎榜_2002-08-02_2026-05-25_合并结果.csv'
 
 chunksize = 200_000
 

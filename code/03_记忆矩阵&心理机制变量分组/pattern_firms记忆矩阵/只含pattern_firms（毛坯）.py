@@ -66,7 +66,7 @@ def dummy_int(s):
 ## 路径设置
 #===============================================================================
 
-ROOT = Path('/Users/qiyuewu/Desktop/mmm复现数据包')
+ROOT = Path(__file__).resolve().parents[3]
 
 IAR_Rept_path = ROOT/'input/CSMAR/年、中、季报基本情况文件2000-01-01至2025-12-31/IAR_Rept.csv'
 pattern_firm_qtr_path = ROOT/'中间结果/02_变量构造结果/PatternFirmQtr/PatternFirmQtr.csv'

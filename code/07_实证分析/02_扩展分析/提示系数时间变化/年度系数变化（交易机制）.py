@@ -18,7 +18,7 @@ from linearmodels.panel.utility import AbsorbingEffectError
 
 
 # 1. 集中设置路径、窗口、年份和显著性水平
-root = Path("/Users/qiyuewu/Desktop/mmm复现数据包")
+root = Path(__file__).resolve().parents[4]
 image_dir = root / "图表结果/02_扩展分析/提示系数时间变化"
 input_path = root / "中间结果/04_合并数据/Pattern样本_最终回归面板.csv"
 oib_path = root / "中间结果/02_变量构造结果/2交易行为OIB、Avol/OIB_CSMAR_prep.csv"
