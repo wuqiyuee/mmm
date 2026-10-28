@@ -1,51 +1,58 @@
-"""逐年估计散户订单失衡的提示系数，并保存年度系数图。
+"""按当前收益主回归口径，逐年估计散户订单失衡的提示系数。
 
+历史沪深300提示、季度主样本（含合格填充日起点）和27项控制均复用
+当前主回归入口；新闻控制使用分段数行者口径，不读取旧市值90分位面板。
 因变量为从当天至未来第h个市场交易日、共h+1日的平均成交量订单失衡。
-订单失衡与限制年份后的主面板按被提示公司×交易日一对一左合并，
-在删除控制变量缺失、分年和删除固定效应单例之前统一进行双侧1%缩尾。
-每年吸收被提示公司×年度季度、交易日期固定效应，采用公司日期双向聚类。
+先在日期范围内的当前主口径全体季度公司日观测上左合并并统一双侧1%缩尾，
+再筛选主回归共同资格和订单失衡有效观测，随后分年并递归删除单例。
+每年吸收被提示公司×年度季度、交易日期固定效应，采用公司和日期双向聚类；
+聚类协方差有限样本修正、实际固定效应秩和残差自由度与当前收益主回归一致。
 源订单失衡已经乘100，展示系数、标准误和置信区间时不再乘100。
-本脚本打印回归结果，并将年度系数图保存为图片。
+每次直接运行依次处理[t,t+1]至[t,t+10]共10个窗口，读取数据、估计并分别保存年度系数图。
+图片文件名仅包含分析类型和窗口，不附加置信水平。
 """
 
 from pathlib import Path
+import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from linearmodels.iv import AbsorbingLS
 from linearmodels.panel.utility import AbsorbingEffectError
 
 
-# 1. 集中设置路径、窗口、年份和显著性水平
+# 1. 导入同目录的统一样本与估计入口，兼容从其他目录调用本脚本。
+script_dir = Path(__file__).resolve().parent
+if str(script_dir) not in sys.path:
+    sys.path.insert(0, str(script_dir))
+from 提示系数回归公共模块 import (
+    CONTROL_COLUMNS,
+    CUE_COLUMN,
+    SPEC_DESCRIPTION,
+    SPEC_ID,
+    estimate_main_specification,
+    load_main_sample,
+    print_progress,
+)
+
+
+# 2. 集中设置路径、窗口、年份和显著性水平。
 root = Path(__file__).resolve().parents[4]
 image_dir = root / "图表结果/02_扩展分析/提示系数时间变化"
-input_path = root / "中间结果/04_合并数据/Pattern样本_最终回归面板.csv"
-oib_path = root / "中间结果/02_变量构造结果/2交易行为OIB、Avol/OIB_CSMAR_prep.csv"
 
-horizon = 5
+horizons = range(1, 11)
 start_year = 2005
 end_year = 2025
 significance_level = 0.10
+# 设为 True（真）时显示完整年度结果表；默认仅报告进度与汇总。
+show_details = False
 
 confidence_level = 1 - significance_level
-raw_dependent_variable = f"OIBvol_avg_t_tp{horizon}"
-dependent_variable = f"{raw_dependent_variable}_w"
-cue = "quarterLag1size90plus"
-window_label = f"[t,t+{horizon}]"
-
-# 2. 保留原回归的27个控制变量
-own_ea_cols = (
-    [f"ownEA_tm{i}" for i in range(10, 0, -1)]
-    + ["ownEA"]
-    + [f"ownEA_tp{i}" for i in range(1, 11)]
-)
-disclosure_cols = ["ownOtherEventER", "ownPerformanceForecastBrief"]
-media_cols = ["aesIncrease", "aesDecrease", "logIncreaseAEV", "logDecreaseAEV"]
-control_cols = own_ea_cols + disclosure_cols + media_cols
+cue = CUE_COLUMN
+control_cols = CONTROL_COLUMNS
 
 
-def main():
+def run_one_window(horizon):
     if not isinstance(horizon, int) or not 1 <= horizon <= 50:
         raise ValueError("窗口终点必须为1—50的整数；所选窗口还必须在订单失衡源表中存在。")
     if start_year > end_year:
@@ -53,134 +60,27 @@ def main():
     if not 0 < significance_level < 1:
         raise ValueError("显著性水平必须介于0和1之间。")
 
+    raw_dependent_variable = f"OIBvol_avg_t_tp{horizon}"
+    dependent_variable = f"{raw_dependent_variable}_w"
+    window_label = f"[t,t+{horizon}]"
     years = list(range(start_year, end_year + 1))
-    panel_numeric_cols = [cue] + control_cols
-    needed_cols = ["StkcdRecall", "Trddt"] + panel_numeric_cols
-    oib_cols = ["Stkcd", "Trddt", raw_dependent_variable]
-    keys = ["StkcdRecall", "Trddt"]
-
-    # 3. 核对主面板和订单失衡源表字段
-    panel_header = pd.read_csv(
-        input_path, nrows=0, encoding="utf-8-sig"
-    ).columns
-    missing_cols = [col for col in needed_cols if col not in panel_header]
-    if missing_cols:
-        raise ValueError(f"主面板缺少以下字段：{missing_cols}")
-    oib_header = pd.read_csv(oib_path, nrows=0, encoding="utf-8-sig").columns
-    missing_oib = [col for col in oib_cols if col not in oib_header]
-    if missing_oib:
-        raise ValueError(f"订单失衡源表缺少以下字段：{missing_oib}")
-
-    print(f"回归年份：{start_year}—{end_year}年")
-    print(f"平均成交量订单失衡窗口：{window_label}，共{horizon + 1}个市场交易日")
-    print(f"显著性水平：{significance_level:.0%}")
-    print(f"置信水平：{confidence_level:.0%}")
-    print("控制变量数量：", len(control_cols))
-
-    # 4. 先只按年份限制主面板；此时保留控制变量缺失的观测
-    read_types = {col: "float64" for col in panel_numeric_cols}
-    read_types["StkcdRecall"] = "string"
-    sample_parts = []
-    reader = pd.read_csv(
-        input_path,
-        usecols=needed_cols,
-        dtype=read_types,
-        chunksize=300_000,
-        encoding="utf-8-sig",
+    # 3. 统一读取当前主样本、合并并缩尾；不按年度分别计算缩尾界限。
+    data = load_main_sample(
+        horizon,
+        f"{start_year}-01-01",
+        f"{end_year}-12-31",
+        outcome_type="交易机制",
     )
-    for block_number, chunk in enumerate(reader, start=1):
-        print(f"正在读取第 {block_number} 个主面板数据块……", flush=True)
-        dates = pd.to_datetime(chunk["Trddt"], errors="coerce")
-        if dates.isna().any():
-            raise ValueError("主面板交易日期存在缺失或无法解析的值。")
-        chunk["Trddt"] = dates
-        chunk = chunk.loc[dates.dt.year.isin(years)].copy()
-        if not chunk.empty:
-            sample_parts.append(chunk)
-
-    if not sample_parts:
-        raise ValueError("所选年份范围内没有主面板观测。")
-    data = pd.concat(sample_parts, ignore_index=True)
-    del sample_parts
-
-    data["StkcdRecall"] = (
-        data["StkcdRecall"].str.strip()
-        .str.replace(r"\.0+$", "", regex=True)
-        .str.zfill(6)
-    )
-    invalid_codes = (
-        data["StkcdRecall"].notna()
-        & ~data["StkcdRecall"].str.fullmatch(r"\d{6}", na=False)
-    )
-    if invalid_codes.any():
-        raise ValueError("主面板被提示公司代码不能规范为6位数字。")
-    data = data.loc[data["StkcdRecall"].notna()].copy()
-    if data.empty:
-        raise ValueError("所选年份范围内没有公司代码有效的主面板观测。")
-    if data.duplicated(keys).any():
-        raise ValueError("主面板被提示公司×交易日期不唯一，不能一对一合并。")
-
-    # 5. 读取原始订单失衡列，规范公司代码和日期后进行一对一左合并
-    oib = pd.read_csv(
-        oib_path,
-        usecols=oib_cols,
-        dtype={"Stkcd": "string", raw_dependent_variable: "float64"},
-        encoding="utf-8-sig",
-    )
-    oib["Trddt"] = pd.to_datetime(oib["Trddt"], errors="coerce")
-    if oib["Trddt"].isna().any():
-        raise ValueError("订单失衡源表交易日期存在缺失或无法解析的值。")
-    oib = oib.loc[
-        oib["Trddt"].between(data["Trddt"].min(), data["Trddt"].max())
-    ].copy()
-    oib["Stkcd"] = (
-        oib["Stkcd"].str.strip()
-        .str.replace(r"\.0+$", "", regex=True)
-        .str.zfill(6)
-    )
-    invalid_oib_codes = (
-        oib["Stkcd"].notna()
-        & ~oib["Stkcd"].str.fullmatch(r"\d{6}", na=False)
-    )
-    if invalid_oib_codes.any():
-        raise ValueError("订单失衡源表公司代码不能规范为6位数字。")
-    oib = oib.loc[oib["Stkcd"].notna()].rename(columns={"Stkcd": "StkcdRecall"})
-    if oib.duplicated(keys).any():
-        raise ValueError("订单失衡源表公司×交易日期不唯一，不能一对一合并。")
-
-    data = data.merge(oib, on=keys, how="left", validate="one_to_one")
-    del oib
-
-    # 6. 在限制年份后的合并全样本统一缩尾，不按年度分别计算分位数
-    # 此步骤在任何控制变量缺失筛选、分年及删除固定效应单例之前。
-    data[raw_dependent_variable] = data[raw_dependent_variable].replace(
-        [np.inf, -np.inf], np.nan
-    )
-    if not data[raw_dependent_variable].notna().any():
-        raise ValueError("合并后没有有效订单失衡观测，请检查公司代码、日期和窗口。")
-    lower, upper = data[raw_dependent_variable].quantile([0.01, 0.99]).tolist()
-    data[dependent_variable] = data[raw_dependent_variable].clip(lower, upper)
-    print("缩尾前合并样本量：", len(data))
-    print("原始订单失衡非缺失数：", int(data[raw_dependent_variable].notna().sum()))
-    print("全样本1%、99%缩尾界限：", [lower, upper])
-    print("订单失衡原值已乘100，回归结果直接以百分点展示。")
-
-    # 7. 缩尾后再筛选回归有效样本，缺失订单失衡不填0
-    if not data[cue].dropna().isin([0, 1]).all():
-        raise ValueError("提示变量存在0、1以外的取值。")
-    numeric_cols = [dependent_variable, cue] + control_cols
-    valid = np.isfinite(data[numeric_cols].to_numpy()).all(axis=1)
-    data = data.loc[valid, keys + numeric_cols].copy()
     year_parts = {
         int(year): part.copy()
         for year, part in data.groupby(data["Trddt"].dt.year, sort=False)
     }
     del data
 
-    # 8. 逐年整理固定效应、递归删除单例并回归
+    # 4. 各年采用当前收益主回归的双固定效应、双向聚类及精确自由度。
     annual_rows = []
-    for year in years:
-        print(f"\n========== 正在处理{year}年 ==========")
+    print_progress("逐年估计", 0, len(years))
+    for year_index, year in enumerate(years, 1):
         row = {
             "年份": year,
             "观测数": 0,
@@ -201,138 +101,37 @@ def main():
         annual_rows.append(row)
         reg = year_parts.pop(year, None)
         if reg is None or reg.empty:
-            print("没有有效样本。")
+            print_progress("逐年估计", year_index, len(years), detail=f"{year}年")
             continue
 
         try:
-            quarter = reg["Trddt"].dt.to_period("Q")
-            reg["_fe_firm_quarter"] = reg.groupby(
-                ["StkcdRecall", quarter], sort=False, observed=True
-            ).ngroup()
-            reg["_fe_date"] = pd.factorize(reg["Trddt"], sort=False)[0]
-
-            singleton_removed = 0
-            while not reg.empty:
-                singleton = np.zeros(len(reg), dtype=bool)
-                for col in ["_fe_firm_quarter", "_fe_date"]:
-                    codes = reg[col].to_numpy(dtype="int64")
-                    counts = np.bincount(codes)
-                    singleton |= counts[codes] == 1
-                if not singleton.any():
-                    break
-                singleton_removed += int(singleton.sum())
-                reg = reg.loc[~singleton].copy()
-
-            row["删除单例观测数"] = singleton_removed
-            if reg.empty:
-                raise ValueError("删除固定效应单例组后，没有剩余样本。")
-            reg = reg.reset_index(drop=True)
-            row.update({
-                "观测数": len(reg),
-                "公司数": reg["StkcdRecall"].nunique(),
-                "交易日期数": reg["Trddt"].nunique(),
-                "提示观测数": int(reg[cue].eq(1).sum()),
-                "提示日期数": reg.loc[reg[cue].eq(1), "Trddt"].nunique(),
-            })
-            if reg[cue].nunique() != 2:
-                raise ValueError("年度样本没有同时保留提示和未提示观测。")
-
-            absorb = pd.DataFrame({
-                "公司季度": pd.Categorical(reg["_fe_firm_quarter"]),
-                "日期": pd.Categorical(reg["_fe_date"]),
-            }, index=reg.index)
-            clusters = pd.DataFrame({
-                "公司": pd.factorize(reg["StkcdRecall"], sort=False)[0],
-                "日期": reg["_fe_date"].to_numpy(),
-            }, index=reg.index)
-
-            # 恒定控制变量本来就被固定效应吸收，先排除以免与常数项重复。
-            constant_controls = [
-                col for col in control_cols if reg[col].nunique() <= 1
-            ]
-            active_controls = [
-                col for col in control_cols if col not in constant_controls
-            ]
-            # 保持原顺序：控制变量在前，提示变量在后。
-            X = reg[active_controls + [cue]].astype("float64").copy()
-            X.insert(0, "const", 1.0)
-
-            print("观测数：", len(reg))
-            print("公司数：", row["公司数"])
-            print("交易日期数：", row["交易日期数"])
-            print("删除单例组观测数：", singleton_removed)
-            print("正在估计年度回归……", flush=True)
-
-            model = AbsorbingLS(
-                dependent=reg[dependent_variable],
-                exog=X,
-                absorb=absorb,
-                drop_absorbed=True,
-            )
-            result = model.fit(
-                cov_type="clustered",
-                clusters=clusters,
-                debiased=True,
-                use_cache=False,
-            )
-            if cue not in result.params.index:
-                raise ValueError("提示变量被固定效应或控制变量吸收，不能单独估计。")
-
-            cue_variance = float(result.cov.loc[cue, cue])
-            if not np.isfinite(cue_variance) or cue_variance <= 0:
-                raise ValueError("提示系数的双向聚类方差非正或无效。")
-
-            # 9. 订单失衡已按百分数存储，系数和区间不再乘100
-            coefficient = float(result.params[cue])
-            standard_error = float(result.std_errors[cue])
-            ci_low, ci_high = (
-                result.conf_int(level=confidence_level).loc[cue]
-            ).tolist()
-            pvalue = float(result.pvalues[cue])
-            if not np.isfinite([
-                coefficient, standard_error, ci_low, ci_high, pvalue
-            ]).all():
-                raise ValueError("年度回归结果包含缺失或无穷值。")
-
-            omitted_controls = [
-                col for col in control_cols if col not in result.params.index
-            ]
-            row.update({
-                "观测数": int(result.nobs),
-                "保留控制变量数": len(control_cols) - len(omitted_controls),
-                "系数_百分点": coefficient,
-                "标准误_百分点": standard_error,
-                "置信下限_百分点": ci_low,
-                "置信上限_百分点": ci_high,
-                "显著性概率": pvalue,
-                "达到显著性阈值": pvalue < significance_level,
-                "状态": "成功",
-            })
-            print("提示系数（百分点）：", coefficient)
-            print("双向聚类标准误（百分点）：", standard_error)
-            print(
-                f"{confidence_level:.0%}置信区间（百分点）：",
-                [ci_low, ci_high],
-            )
-            print("显著性概率：", pvalue)
-            print(f"是否达到{significance_level:.0%}显著性阈值：", pvalue < significance_level)
-            print("因恒定、固定效应或共线而省略的控制变量：", omitted_controls)
+            # 订单失衡源值已为百分点，换算倍数为1。
+            row.update(estimate_main_specification(
+                reg,
+                dependent_variable,
+                window_label,
+                significance_level,
+                scale=1,
+            ))
         except (ValueError, np.linalg.LinAlgError, AbsorbingEffectError) as error:
             row["状态"] = f"未成功：{error}"
             print(f"{year}年未成功：{error}")
+        print_progress("逐年估计", year_index, len(years), detail=f"{year}年")
 
-    # 10. 汇总年度结果；所有年份均失败时给出提示
+    # 5. 汇总年度结果；没有成功年份时保留失败信息并跳过绘图。
     annual_results = pd.DataFrame(annual_rows).sort_values("年份").reset_index(drop=True)
-    print(f"\n{start_year}—{end_year}年年度回归结果：")
-    print(annual_results.to_string(index=False))
+    if show_details:
+        print(f"\n{start_year}—{end_year}年年度回归结果：")
+        print(annual_results.to_string(index=False))
     success = annual_results["状态"].eq("成功")
-    print("\n成功估计的年份数：", int(success.sum()))
+    success_count = int(success.sum())
+    print(f"年度估计汇总：成功{success_count}年，未成功{len(years) - success_count}年。")
     plot_data = annual_results.loc[success].copy()
     if plot_data.empty:
         print("没有成功估计的年度结果，无法绘制系数图。")
         return annual_results
 
-    # 11. 保存年度系数图，文件名体现样本区间、回归类型、窗口和置信水平
+    # 6. 保存当前窗口的年度系数图，文件名仅包含分析类型和窗口。
     plt.rcParams["font.sans-serif"] = ["PingFang SC", "Arial Unicode MS", "SimHei"]
     plt.rcParams["axes.unicode_minus"] = False
     error_lower = plot_data["系数_百分点"] - plot_data["置信下限_百分点"]
@@ -362,7 +161,7 @@ def main():
     image_dir.mkdir(parents=True, exist_ok=True)
     figure_path = image_dir / (
         "年度_交易机制_"
-        f"窗口{window_label}_{confidence_level:.0%}置信区间.png"
+        f"窗口{window_label}.png"
     )
     fig.savefig(figure_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -370,5 +169,29 @@ def main():
     return annual_results
 
 
+def main():
+    """依次处理10个窗口，只保留各窗口的年度结果，避免累积完整回归样本。"""
+    print(f"主回归口径：{SPEC_DESCRIPTION}")
+    print(
+        f"回归年份：{start_year}—{end_year}年；置信水平：{confidence_level:.0%}；"
+        f"控制变量：{len(control_cols)}项；平均成交量订单失衡窗口：共{len(horizons)}个。"
+    )
+    annual_results_by_horizon = {}
+    for window_index, horizon in enumerate(horizons, 1):
+        print(
+            f"\n窗口{window_index}/{len(horizons)}：[t,t+{horizon}]；"
+            f"已完成窗口：{window_index - 1}/{len(horizons)}"
+            f"（{(window_index - 1) / len(horizons):.0%}）",
+            flush=True,
+        )
+        annual_results_by_horizon[horizon] = run_one_window(horizon)
+        print(
+            f"已完成窗口：{window_index}/{len(horizons)}"
+            f"（{window_index / len(horizons):.0%}）",
+            flush=True,
+        )
+    return annual_results_by_horizon
+
+
 if __name__ == "__main__":
-    annual_results = main()
+    annual_results_by_horizon = main()

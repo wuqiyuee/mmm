@@ -96,13 +96,25 @@ def select_news(block: np.ndarray, source: str = NEWS_SOURCE) -> np.ndarray:
     raise ValueError(f"不支持的新闻口径：{source}")
 
 
-def iter_main_blocks(source: str = NEWS_SOURCE):
+def iter_main_blocks(
+    source: str = NEWS_SOURCE,
+    *,
+    required_horizons: tuple[int, ...] = (1, 3, 5),
+):
     """逐季度提供面板、50窗收益、27项控制、提示指标及共同资格掩码。
 
-    基础数据已继承两日、十一日收益完整资格。本处继续要求1、3、5三个
-    短窗和27项控制共同有效；各模型再检查自身收益并删除相应固定效应单例。
+    基础数据已继承两日、十一日收益完整资格。本处按调用方指定的窗口
+    终点要求收益及27项控制共同有效；表2传入(1, 10)，只检查两日、十一日。
+    默认(1, 3, 5)保留图2及其他既有调用方的三短窗要求。各模型再检查
+    自身收益并删除相应固定效应单例。
     收益沿用既有缩尾值，不重新计算基准、断点或缩尾阈值。
     """
+    if not required_horizons or any(
+        not isinstance(horizon, (int, np.integer)) or not 1 <= horizon <= 50
+        for horizon in required_horizons
+    ):
+        raise ValueError("所需收益窗口终点必须为1至50的整数，且至少指定一个窗口。")
+    return_columns = [horizon - 1 for horizon in required_horizons]
     paths, cue_index = main_input_paths()
     total_rows = 0
     for path in paths:
@@ -126,7 +138,8 @@ def iter_main_blocks(source: str = NEWS_SOURCE):
         cue = block["cues"][:, cue_index]
         if not np.isin(cue, [0, 1]).all():
             raise ValueError(f"{path.name} 的沪深300提示并非0/1指标。")
-        keep = np.isfinite(controls).all(axis=1) & np.isfinite(block["y"]).all(axis=1)
+        keep = np.isfinite(controls).all(axis=1)
+        keep &= np.isfinite(returns[:, return_columns]).all(axis=1)
         keep &= (dates >= np.datetime64(START_DATE)) & (dates <= np.datetime64(END_DATE))
         if not ALLOW_FILLED_STARTS:
             keep &= block["filled"] == 0

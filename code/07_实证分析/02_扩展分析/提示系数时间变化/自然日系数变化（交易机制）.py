@@ -1,476 +1,150 @@
-"""逐日估计交易机制的提示系数，打印结果并保存图片。
+"""联合估计每日订单失衡提示系数，使用当前收益主回归的完整规格。
 
-一行样本为“被提示公司×交易日期”；每个日期单独估计横截面回归。
-因变量为成交量口径的窗口平均订单失衡，先与最终面板按公司日左合并，
-再在日期范围内的全体合并样本上双侧1%缩尾，然后筛选回归有效观测。
-源变量已经乘过100，系数、标准误和置信区间不再乘100。
-控制变量共27个；无固定效应，使用异方差稳健标准误和双侧检验。
-某组仅1条观测时，图中用橙色三角展示系数，不展示其置信区间。
-默认显著性水平10%，对应90%置信区间。直接运行时才读取数据、估计和保存图片。
-图片文件名包含自然日、交易机制、窗口和置信水平。
+所有日期一起估计，每天保留独立的提示系数，27项控制的斜率全期共用。
+吸收被提示公司×年度季度和日期固定效应，按公司、日期双向聚类；
+提示、样本及分段新闻控制复用当前主回归入口，保留合格填充日起点。
+订单失衡先与范围内主口径公司日全样本左合并并统一双侧1%缩尾，
+再筛选共同资格及本次因变量有效值；不填补缺失，不按日或年度重新缩尾。
+源订单失衡已是百分点，展示时不再乘100。
+分季度计算联合回归，不构造全部观测×全部日期的稠密矩阵。
+默认依次估计[t,t+1]至[t,t+10]，每个窗口分别保存一张系数图。
+仅直接运行时读取数据、估计和保存图片；导入不执行这些步骤。
 """
 
 from pathlib import Path
+import sys
 
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import statsmodels.api as sm
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 
 
-# ============================================================
-# 一、参数区：以后主要修改这里
-# ============================================================
+script_dir = Path(__file__).resolve().parent
+if str(script_dir) not in sys.path:
+    sys.path.insert(0, str(script_dir))
+from 提示系数回归公共模块 import (
+    CONTROL_COLUMNS, CUE_COLUMN, SPEC_DESCRIPTION, load_main_sample,
+)
+from 提示系数联合日度估计 import estimate_joint_daily
 
+
+# 一、参数：窗口终点表示包含当天及随后相应数量市场交易日。
 root = Path(__file__).resolve().parents[4]
-input_path = root / "中间结果/04_合并数据/Pattern样本_最终回归面板.csv"
-oib_path = root / "中间结果/02_变量构造结果/2交易行为OIB、Avol/OIB_CSMAR_prep.csv"
 image_dir = root / "图表结果/02_扩展分析/提示系数时间变化"
-
-# 窗口终点5表示[t,t+5]，是h+1个市场交易日日度订单失衡的算术均值。
-# 此处直接使用源表已经构造的窗口变量，不重新计算窗口或填补缺失。
-horizon = 5
-raw_dependent_variable = f"OIBvol_avg_t_tp{horizon}"
-dependent_variable = f"{raw_dependent_variable}_w"
-window_label = f"[t,t+{horizon}]"
-cue = "quarterLag1size90plus"
-
+horizons = range(1, 11)
+cue = CUE_COLUMN
+control_cols = CONTROL_COLUMNS
 start_date = "2005-01-01"
 end_date = "2025-12-31"
-chunk_size = 300_000
-
-# 双侧显著性水平；0.10对应90%置信区间，0.05对应95%置信区间。
 significance_level = 0.10
 confidence_level = 1 - significance_level
-
-# 被提示公司自身盈余公告：共21个控制变量。
-own_ea_cols = (
-    [f"ownEA_tm{i}" for i in range(10, 0, -1)]
-    + ["ownEA"]
-    + [f"ownEA_tp{i}" for i in range(1, 11)]
-)
-
-# 其他公告与媒体：共6个控制变量。
-other_control_cols = [
-    "ownOtherEventER",
-    "ownPerformanceForecastBrief",
-    "aesIncrease",
-    "aesDecrease",
-    "logIncreaseAEV",
-    "logDecreaseAEV",
-]
-control_cols = own_ea_cols + other_control_cols
-key_cols = ["StkcdRecall", "Trddt"]
-# 最终面板没有订单失衡字段，读取它时只能要求键、提示和控制变量。
-panel_cols = key_cols + [cue] + control_cols
-regression_cols = panel_cols + [dependent_variable]
-numeric_cols = [dependent_variable, cue] + control_cols
+show_details = False  # 改为True时打印完整日度结果表。
 
 
-# ============================================================
-# 二、检查字段，先准备统一的订单失衡对照表
-# ============================================================
-
-def check_input():
-    if not isinstance(horizon, int) or not 1 <= horizon <= 50:
-        raise ValueError("窗口终点必须为1—50的整数。")
-    if not 0 < significance_level < 1:
-        raise ValueError("显著性水平必须在0和1之间。")
-    if pd.Timestamp(start_date) > pd.Timestamp(end_date):
-        raise ValueError("起始日期不得晚于结束日期。")
-
-    panel_header = pd.read_csv(input_path, nrows=0, encoding="utf-8-sig").columns
-    missing_panel = [col for col in panel_cols if col not in panel_header]
-    if missing_panel:
-        raise ValueError(f"最终面板缺少以下字段：{missing_panel}")
-    oib_header = pd.read_csv(oib_path, nrows=0, encoding="utf-8-sig").columns
-    missing_oib = [
-        col for col in ["Stkcd", "Trddt", raw_dependent_variable]
-        if col not in oib_header
-    ]
-    if missing_oib:
-        raise ValueError(f"订单失衡源表缺少以下字段：{missing_oib}")
-
-    print("订单失衡原始因变量：", raw_dependent_variable)
-    print("回归因变量：", dependent_variable)
-    print("控制变量数量：", len(control_cols))
-    print(f"双侧显著性水平：{significance_level:.0%}")
-    print(f"置信水平：{confidence_level:.0%}")
-    print("订单失衡源变量已按百分数存储，展示系数时不再乘100。")
-
-
-def prepare_oib_lookup():
-    """先确定合并样本的统一缩尾值，随后所有数据块重复使用此结果。"""
-    key_parts = []
-    with pd.read_csv(
-        input_path,
-        usecols=key_cols,
-        dtype={"StkcdRecall": "string", "Trddt": "string"},
-        chunksize=chunk_size,
-        encoding="utf-8-sig",
-    ) as reader:
-        for number, chunk in enumerate(reader, start=1):
-            print(f"读取全样本公司日期键：第 {number} 个数据块……", flush=True)
-            chunk["Trddt"] = pd.to_datetime(chunk["Trddt"], errors="raise")
-            chunk = chunk.loc[chunk["Trddt"].between(start_date, end_date)].copy()
-            if chunk.empty:
-                continue
-            chunk["StkcdRecall"] = (
-                chunk["StkcdRecall"].str.strip()
-                .str.replace(r"\.0$", "", regex=True).replace("", pd.NA).str.zfill(6)
-            )
-            key_parts.append(chunk)
-
-    if not key_parts:
-        raise ValueError("指定日期范围内没有面板观测。")
-    panel_keys = pd.concat(key_parts, ignore_index=True)
-    del key_parts
-    if panel_keys[key_cols].isna().any().any():
-        raise ValueError("日期范围内的最终面板存在缺失公司日期键。")
-    if panel_keys.duplicated(key_cols).any():
-        raise ValueError("日期范围内的最终面板存在重复公司日期记录。")
-
-    oib = pd.read_csv(
-        oib_path,
-        usecols=["Stkcd", "Trddt", raw_dependent_variable],
-        dtype={"Stkcd": "string", "Trddt": "string", raw_dependent_variable: "float64"},
-        encoding="utf-8-sig",
-    )
-    oib["Trddt"] = pd.to_datetime(oib["Trddt"], errors="raise")
-    oib["Stkcd"] = (
-        oib["Stkcd"].str.strip().str.replace(r"\.0$", "", regex=True)
-        .replace("", pd.NA).str.zfill(6)
-    )
-    oib = oib.rename(columns={"Stkcd": "StkcdRecall"})
-    if oib[key_cols].isna().any().any():
-        raise ValueError("订单失衡源表存在缺失公司日期键。")
-    if oib.duplicated(key_cols).any():
-        raise ValueError("订单失衡源表存在重复公司日期记录。")
-
-    # 左合并保留日期范围内所有面板观测，尚未按控制缺失或两组情况筛选。
-    lookup = panel_keys.merge(oib, on=key_cols, how="left", validate="one_to_one")
-    del panel_keys, oib
-    raw_values = lookup[raw_dependent_variable].replace([np.inf, -np.inf], np.nan)
-    if not raw_values.notna().any():
-        raise ValueError("合并样本的订单失衡全部缺失，请检查窗口和公司日期匹配。")
-    lower, upper = raw_values.quantile([0.01, 0.99]).tolist()
-    lookup[dependent_variable] = raw_values.clip(lower=lower, upper=upper)
-    lookup = lookup[key_cols + [dependent_variable]].copy()
-
-    print("\n用于确定缩尾值的面板观测数：", len(lookup))
-    print("合并后订单失衡非缺失观测数：", int(raw_values.notna().sum()))
-    print("统一1%缩尾下界：", lower)
-    print("统一99%缩尾上界：", upper)
-    print("\n合并缩尾后的前5行数据：")
-    print(lookup.head())
-    return lookup
-
-
-# ============================================================
-# 三、分块读取，每块合并同一份已缩尾订单失衡
-# ============================================================
-
-def read_chunks(stage, oib_lookup):
-    read_types = {col: "float64" for col in [cue] + control_cols}
-    read_types.update({"StkcdRecall": "string", "Trddt": "string"})
-    with pd.read_csv(
-        input_path,
-        usecols=panel_cols,
-        dtype=read_types,
-        chunksize=chunk_size,
-        encoding="utf-8-sig",
-    ) as reader:
-        for number, chunk in enumerate(reader, start=1):
-            print(f"{stage}：第 {number} 个数据块……", flush=True)
-            chunk["Trddt"] = pd.to_datetime(chunk["Trddt"], errors="raise")
-            chunk = chunk.loc[chunk["Trddt"].between(start_date, end_date)].copy()
-            if chunk.empty:
-                continue
-            chunk["StkcdRecall"] = (
-                chunk["StkcdRecall"].str.strip()
-                .str.replace(r"\.0$", "", regex=True).replace("", pd.NA).str.zfill(6)
-            )
-            chunk = chunk.merge(
-                oib_lookup, on=key_cols, how="left", validate="one_to_one"
-            )
-            yield chunk
-
-
-def get_valid_mask(data):
-    """缺失的订单失衡不填0，与提示变量和全部控制一起做完整观测筛选。"""
-    return (
-        data["StkcdRecall"].notna()
-        & np.isfinite(data[numeric_cols].to_numpy()).all(axis=1)
-    )
-
-
-# ============================================================
-# 四、统计每日样本与年度分布
-# ============================================================
-
-def count_daily_samples(oib_lookup):
-    daily_parts = []
-    for chunk in read_chunks("统计每日样本", oib_lookup):
-        if not chunk[cue].dropna().isin([0, 1]).all():
-            raise ValueError("提示变量中存在0、1以外的取值。")
-        valid = get_valid_mask(chunk)
-        chunk["有效观测数"] = valid
-        chunk["有效提示观测数"] = valid & chunk[cue].eq(1)
-        chunk["有效未提示观测数"] = valid & chunk[cue].eq(0)
-        daily_parts.append(chunk.groupby("Trddt").agg(
-            面板观测数=("StkcdRecall", "size"),
-            有效观测数=("有效观测数", "sum"),
-            有效提示观测数=("有效提示观测数", "sum"),
-            有效未提示观测数=("有效未提示观测数", "sum"),
-        ))
-
-    if not daily_parts:
-        raise ValueError("指定日期范围内没有观测。")
-    # 同一天可能分散在多个数据块中，必须再次汇总。
-    daily_counts = pd.concat(daily_parts).groupby(level=0).sum().sort_index()
-    daily_counts["两组均有有效观测"] = (
-        daily_counts["有效提示观测数"].gt(0)
-        & daily_counts["有效未提示观测数"].gt(0)
-    )
-    return daily_counts
-
-
-def show_sample_summary(daily_counts):
-    print("\n日期数：", len(daily_counts))
-    print("有效观测总数：", int(daily_counts["有效观测数"].sum()))
-    print("两组均有有效观测的日期数：", int(daily_counts["两组均有有效观测"].sum()))
-    print("有效样本中没有提示观测的日期数：", int(daily_counts["有效提示观测数"].eq(0).sum()))
-    print("\n前10个日期的统计：")
-    print(daily_counts.head(10).to_string())
-
-    yearly_counts = daily_counts.groupby(daily_counts.index.year).agg(
-        交易日期数=("面板观测数", "size"),
-        有效观测数=("有效观测数", "sum"),
-        有效提示观测数=("有效提示观测数", "sum"),
-        两组均有有效观测的日期数=("两组均有有效观测", "sum"),
-    )
-    yearly_counts.index.name = "年份"
-    print("\n各年份的提示观测分布：")
-    print(yearly_counts.to_string())
-
-    active_dates = daily_counts.index[daily_counts["有效提示观测数"].gt(0)]
-    if len(active_dates):
-        print("\n最早有效提示日期：", active_dates.min().date())
-        print("最晚有效提示日期：", active_dates.max().date())
-
-
-# ============================================================
-# 五、提取样本，核对每日行数与公司日期唯一键
-# ============================================================
-
-def extract_regression_sample(daily_counts, oib_lookup):
-    target_dates = daily_counts.index[daily_counts["两组均有有效观测"]]
-    if len(target_dates) == 0:
-        raise ValueError("没有同时存在两组有效观测的日期。")
-    print("\n准备提取的日期数：", len(target_dates))
-
-    regression_parts = []
-    for chunk in read_chunks("提取回归样本", oib_lookup):
-        chunk = chunk.loc[chunk["Trddt"].isin(target_dates)].copy()
-        if chunk.empty:
-            continue
-        valid = get_valid_mask(chunk)
-        if valid.any():
-            regression_parts.append(chunk.loc[valid, regression_cols].copy())
-
-    if not regression_parts:
-        raise ValueError("没有提取到有效回归样本。")
-    regression_data = pd.concat(regression_parts, ignore_index=True)
-    actual_counts = (
-        regression_data.groupby("Trddt").size().reindex(target_dates, fill_value=0)
-    )
-    expected_counts = daily_counts.loc[target_dates, "有效观测数"]
-    if not actual_counts.eq(expected_counts).all():
-        raise ValueError("提取后的日度观测数与此前统计不一致。")
-    if regression_data.duplicated(key_cols).any():
-        raise ValueError("回归样本存在重复的被提示公司日期记录。")
-
-    print("\n每日回归样本提取完成。")
-    print("观测行数：", len(regression_data))
-    print("日期数：", regression_data["Trddt"].nunique())
-    print("各日期观测数量与公司日期唯一键核对通过。")
-    return regression_data
-
-
-# ============================================================
-# 六、逐日回归：先保留独立控制变量，再检查提示变量能否识别
-# ============================================================
-
-def estimate_one_day(day_data):
-    if day_data.empty:
-        raise ValueError("传入的单日样本为空。")
-    row = {
-        "日期": day_data["Trddt"].iloc[0],
-        "观测数": len(day_data),
-        "提示观测数": int(day_data[cue].eq(1).sum()),
-        "未提示观测数": int(day_data[cue].eq(0).sum()),
-        "保留控制变量数": 0,
-        "系数_百分点": np.nan,
-        "标准误_百分点": np.nan,
-        "置信下限_百分点": np.nan,
-        "置信上限_百分点": np.nan,
-        "显著性概率": np.nan,
-        "状态": "待估计",
-    }
-
-    kept_controls = []
-    omitted_controls = []
-    control_matrix = np.ones((len(day_data), 1))
-    for col in control_cols:
-        candidate_matrix = np.column_stack([control_matrix, day_data[col].to_numpy()])
-        if np.linalg.matrix_rank(candidate_matrix) > control_matrix.shape[1]:
-            kept_controls.append(col)
-            control_matrix = candidate_matrix
-        else:
-            omitted_controls.append(col)
-    row["保留控制变量数"] = len(kept_controls)
-
-    design = sm.add_constant(day_data[kept_controls + [cue]], has_constant="add")
-    if np.linalg.matrix_rank(design.to_numpy()) < design.shape[1]:
-        row["状态"] = "提示变量与控制变量完全共线"
-        return row, omitted_controls
-    if len(day_data) <= design.shape[1]:
-        row["状态"] = "剩余自由度不足"
-        return row, omitted_controls
-
-    fit = sm.OLS(day_data[dependent_variable], design, missing="raise").fit(
-        cov_type="HC1",  # 异方差稳健标准误。
-        use_t=True,      # 检验与置信区间使用t分布。
-    )
-    # 订单失衡源变量已乘过100，系数、标准误和置信区间都不再乘100。
-    coefficient = float(fit.params[cue])
-    standard_error = float(fit.bse[cue])
-    ci_low, ci_high = fit.conf_int(alpha=significance_level).loc[cue].tolist()
-    pvalue = float(fit.pvalues[cue])
-
-    if np.isfinite([coefficient, standard_error, ci_low, ci_high, pvalue]).all():
-        row.update({
-            "系数_百分点": coefficient,
-            "标准误_百分点": standard_error,
-            "置信下限_百分点": ci_low,
-            "置信上限_百分点": ci_high,
-            "显著性概率": pvalue,
-            "状态": "成功",
-        })
-    else:
-        row["状态"] = "估计结果含缺失或无穷值"
-    return row, omitted_controls
-
-
-def estimate_all_days(regression_data):
-    daily_rows = []
-    for number, (_, day_data) in enumerate(
-        regression_data.groupby("Trddt", sort=True), start=1
-    ):
-        if number % 20 == 0:
-            print(f"已开始估计第 {number} 个日期……", flush=True)
-        row, _ = estimate_one_day(day_data)
-        daily_rows.append(row)
-
-    daily_results = pd.DataFrame(daily_rows).sort_values("日期").reset_index(drop=True)
-    success = daily_results["状态"].eq("成功")
-    print("\n候选日期数：", len(daily_results))
-    print("成功估计的日期数：", int(success.sum()))
-    print("未成功估计的日期数：", int((~success).sum()))
-    print(f"本次区间采用{confidence_level:.0%}置信水平。")
-    print("\n前10个日期的回归结果：")
-    print(daily_results.head(10).to_string(index=False))
-    if (~success).any():
-        print("\n未成功估计的日期及原因：")
-        print(daily_results.loc[
-            ~success, ["日期", "提示观测数", "未提示观测数", "状态"]
-        ].to_string(index=False))
-    return daily_results
-
-
-# ============================================================
-# 七、构造日度系数图，在主流程中保存
-# ============================================================
-
-def plot_daily_results(daily_results):
-    plt.rcParams["font.sans-serif"] = ["Arial Unicode MS"]
+def plot_daily_results(daily_results, window_label):
+    """每天一个提示系数；置信区间来自同一个联合回归。"""
+    plt.rcParams["font.sans-serif"] = ["PingFang SC", "Arial Unicode MS", "SimHei"]
     plt.rcParams["axes.unicode_minus"] = False
-    plot_data = daily_results.loc[daily_results["状态"].eq("成功")].sort_values("日期")
+    plot_data = daily_results.loc[
+        np.isfinite(daily_results["系数_百分点"])
+    ].sort_values("日期")
     if plot_data.empty:
-        raise ValueError("没有成功估计的日期，无法绘图。")
-
-    single_group = plot_data["提示观测数"].eq(1) | plot_data["未提示观测数"].eq(1)
-    regular_data = plot_data.loc[~single_group]
-    single_data = plot_data.loc[single_group]
+        raise ValueError("没有可估计的日期提示系数，无法绘图。")
+    valid_ci = np.isfinite(plot_data[
+        ["置信下限_百分点", "置信上限_百分点"]
+    ]).all(axis=1)
+    interval_data = plot_data.loc[valid_ci]
     fig, ax = plt.subplots(figsize=(14, 6))
     ax.vlines(
-        regular_data["日期"], regular_data["置信下限_百分点"], regular_data["置信上限_百分点"],
-        color="#AAB2BD", linewidth=0.8, alpha=0.7,
-        label=f"逐日{confidence_level:.0%}稳健置信区间",
+        interval_data["日期"], interval_data["置信下限_百分点"],
+        interval_data["置信上限_百分点"], color="#AAB2BD", linewidth=0.8,
+        alpha=0.7, label=f"{confidence_level:.0%}双向聚类置信区间",
     )
     ax.scatter(
-        regular_data["日期"], regular_data["系数_百分点"],
-        color="#2166AC", s=22, zorder=3, label="每日回归系数",
+        plot_data["日期"], plot_data["系数_百分点"],
+        color="#2166AC", s=22, zorder=3, label="联合回归的每日提示系数",
     )
-    if not single_data.empty:
+    if (~valid_ci).any():
         ax.scatter(
-            single_data["日期"], single_data["系数_百分点"],
-            color="#D97706", marker="^", s=42, zorder=4, label="某组仅1条观测",
+            plot_data.loc[~valid_ci, "日期"],
+            plot_data.loc[~valid_ci, "系数_百分点"], color="#D97706",
+            marker="^", s=42, zorder=4, label="聚类方差无效，仅展示系数",
         )
     ax.axhline(0, color="black", linestyle="--", linewidth=1)
-    start_year = pd.Timestamp(start_date).year
-    end_year = pd.Timestamp(end_date).year
-    ax.set_xticks(pd.to_datetime([
-        f"{year}-01-01" for year in range(start_year, end_year + 1, 2)
-    ]))
+    ax.xaxis.set_major_locator(mdates.YearLocator())
+    ax.xaxis.set_minor_locator(mdates.MonthLocator(bymonth=[4, 7, 10]))
     ax.set_xlim(pd.Timestamp(start_date), pd.Timestamp(end_date))
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+    ax.tick_params(axis="x", which="major", labelrotation=45, length=6)
+    ax.tick_params(axis="x", which="minor", length=3)
     ax.set_xlabel("自然日期")
     ax.set_ylabel("提示系数（百分点）")
-    ax.set_title(f"{window_label}平均成交量订单失衡：每日横截面回归系数")
+    ax.set_title(f"{window_label}平均成交量订单失衡：联合估计的每日提示系数")
     ax.grid(axis="y", alpha=0.2)
     ax.legend(frameon=False)
     fig.tight_layout()
     return fig, ax
 
 
-# ============================================================
-# 八、主流程：只有直接运行时才执行
-# ============================================================
+def run_one_window(horizon):
+    """估计一个订单失衡窗口，并保存该窗口的每日提示系数图。"""
+    raw_dependent_variable = f"OIBvol_avg_t_tp{horizon}"
+    dependent_variable = f"{raw_dependent_variable}_w"
+    window_label = f"[t,t+{horizon}]"
+    # 二、复用当前主样本；无提示日仍参与固定效应和共用控制系数估计。
+    if not 0 < significance_level < 1:
+        raise ValueError("显著性水平必须介于0和1之间。")
+    if pd.Timestamp(start_date) > pd.Timestamp(end_date):
+        raise ValueError("起始日期不得晚于结束日期。")
+    data = load_main_sample(horizon, start_date, end_date, outcome_type="交易机制")
 
-def main():
-    check_input()
-    oib_lookup = prepare_oib_lookup()
-    daily_counts = count_daily_samples(oib_lookup)
-    show_sample_summary(daily_counts)
-    regression_data = extract_regression_sample(daily_counts, oib_lookup)
-    del oib_lookup
+    # 三、联合估计、递归删单例、计算主回归口径的双向聚类推断。
+    daily_counts, regression_data, daily_results = estimate_joint_daily(
+        data, dependent_variable, significance_level, scale=1,
+    )
+    del data, regression_data
+    if show_details:
+        print("\n每日样本统计（删除固定效应单例后）：")
+        print(daily_counts.to_string())
+        print("\n每日联合回归结果：")
+        print(daily_results.to_string(index=False))
 
-    target_dates = daily_counts.index[daily_counts["两组均有有效观测"]]
-    example_date = daily_counts.loc[target_dates, "有效提示观测数"].idxmax()
-    example_data = regression_data.loc[regression_data["Trddt"].eq(example_date)]
-    example_result, omitted_controls = estimate_one_day(example_data)
-    print("\n单日示范结果：")
-    print(pd.Series(example_result).to_string())
-    print("\n该日为常量或完全共线的控制变量：")
-    print(omitted_controls)
-
-    daily_results = estimate_all_days(regression_data)
-    if daily_results["状态"].eq("成功").any():
-        fig, ax = plot_daily_results(daily_results)
+    # 四、文件名仅保留分析类型和窗口；只有运行本脚本时才保存图片。
+    if np.isfinite(daily_results["系数_百分点"]).any():
+        fig, ax = plot_daily_results(daily_results, window_label)
         image_dir.mkdir(parents=True, exist_ok=True)
         figure_path = image_dir / (
-            "自然日_交易机制_"
-            f"窗口{window_label}_{confidence_level:.0%}置信区间.png"
+            f"自然日_交易机制_窗口{window_label}.png"
         )
         fig.savefig(figure_path, dpi=300, bbox_inches="tight")
         plt.close(fig)
         print("图片已保存：", figure_path)
     else:
-        print("没有成功估计的日期，保留结果表并跳过图片保存。")
-    return daily_counts, regression_data, daily_results
+        print("没有可估计的日期提示系数，跳过图片保存。")
+    return daily_results
+
+
+def main():
+    """依次处理10个窗口，只保留各窗口的日度结果，避免累积完整回归样本。"""
+    print("当前主回归口径：", SPEC_DESCRIPTION)
+    print(f"提示变量：{cue}；控制变量{len(control_cols)}项；置信水平{confidence_level:.0%}")
+    print("所有日期联合估计，每日提示系数不同，控制变量系数全期共用。")
+    daily_results_by_horizon = {}
+    total_windows = len(horizons)
+    for number, horizon in enumerate(horizons, start=1):
+        print(
+            f"\n窗口{number}/{total_windows}：[t,t+{horizon}]；"
+            f"已完成窗口{number - 1}/{total_windows}"
+            f"（{(number - 1) / total_windows:.0%}）", flush=True,
+        )
+        daily_results_by_horizon[horizon] = run_one_window(horizon)
+        print(
+            f"已完成窗口{number}/{total_windows}（{number / total_windows:.0%}）",
+            flush=True,
+        )
+    return daily_results_by_horizon
 
 
 if __name__ == "__main__":
-    daily_counts, regression_data, daily_results = main()
+    daily_results_by_horizon = main()

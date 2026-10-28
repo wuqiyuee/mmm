@@ -1,30 +1,25 @@
 """
-估计并绘制加入交易日期固定效应的图2“收益动态和长期反转”。
+按当前表2主规格估计并绘制图2“收益动态和长期反转”。
 
-固定效应：
-1. 被提示公司 × 年度季度；
-2. 交易日期。
+与表2共用主回归口径：历史沪深300提示、个人365天共同覆盖排除、
+数行者分段新闻、合格填充日起点及全部年份。收益沿用季度缓存中的
+既有缩尾值，各窗口只检查自身收益，不要求50个窗口同时完整。
 
-标准误按被提示公司和交易日期双向聚类，并采用有限样本修正。
-当前合并绘图脚本也已开启有限样本修正。
+直接复用表2规格（6）的估计器：被提示公司×年度季度及交易日期
+固定效应、递归删除单例、双向聚类有限样本修正和精确残差自由度。
+共估计50个累计窗口，结果单位为百分点；使用同一自由度的t分布
+绘制99%、95%、90%置信区间，红点表示10%水平显著。
 
-因变量使用最终回归面板中已经缩尾的累计特征调整收益变量，
-本脚本不再次缩尾。控制变量与当前合并绘图脚本保持一致。
-
-共估计50个累计窗口：[t,t+1]至[t,t+50]。
-系数、标准误和置信区间统一转换为百分点。
-图中展示99%、95%、90%正态近似置信区间；
-红点表示对应窗口在10%水平上显著。
-
-每完成一个窗口就保存一次结果。
-仅在输入数据和回归设置未变化时，使用 --resume（续算参数）。
-输入或回归设置变化后，应从头重新估计。
+每个窗口保存前校验口径及已有的第1、第10窗口表2锚点。
+仅当数据和设置未变时使用 --resume（续算参数）；旧口径结果不能续算。
+导入本模块不会读取回归数据或写文件。
 """
 
 from __future__ import annotations
 
 import argparse
 import gc
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -34,7 +29,6 @@ import pandas as pd
 from scipy import stats
 
 
-# 公共回归核心统一位于实证分析的公共模块目录。。
 def find_project_root() -> Path:
     """按项目说明、代码和中间结果三个标记，从当前文件的祖先目录寻根。"""
     for candidate in Path(__file__).resolve().parents:
@@ -49,1390 +43,319 @@ def find_project_root() -> Path:
 
 ROOT = find_project_root()
 MODULE_DIR = ROOT / "code" / "07_实证分析" / "90_公共模块"
-sys.path.insert(0, str(MODULE_DIR))
-from 图2图3扩展_日期固定效应回归公共模块 import (
-    residualize_regression_data as residualize_regression_data_shared,
-)
+TABLE2_DIR = ROOT / "code" / "07_实证分析" / "01_主线图表" / "表2_收益回归"
+if str(MODULE_DIR) not in sys.path:
+    sys.path.insert(0, str(MODULE_DIR))
 
+from 主回归口径 import (
+    CONTROL_COLUMNS, CUE_COLUMN, NEWS_SOURCE, SPEC_DESCRIPTION, SPEC_ID,
+    iter_main_blocks,
+)
+# 表2脚本位于相邻任务目录，按实际文件路径加载，避免依赖跨目录模块名解析。
+# 加载同一份正式估计器，导入过程不会执行其主函数或读取回归数据。
+TABLE2_PATH = TABLE2_DIR / "估计回归.py"
+if not TABLE2_PATH.is_file():
+    raise FileNotFoundError(f"找不到表2估计器：{TABLE2_PATH}")
+
+table2_spec = importlib.util.spec_from_file_location("_figure2_table2_estimator", TABLE2_PATH)
+if table2_spec is None or table2_spec.loader is None:
+    raise ImportError(f"无法创建表2估计器的加载入口：{TABLE2_PATH}")
+table2_module = importlib.util.module_from_spec(table2_spec)
+table2_spec.loader.exec_module(table2_module)
+run_table2_regression = table2_module.run_return_regression
+table2_specifications = table2_module.table2_specifications
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import font_manager
 
 
-
-PATTERN_PATH = (
-    ROOT
-    / "中间结果"
-    / "04_合并数据"
-    / "Pattern样本_最终回归面板.csv"
-)
-
 OUTPUT_DIR = ROOT / "图表结果" / "01_主线图表" / "图2_收益动态"
 RESULT_PATH = OUTPUT_DIR / "图2_收益动态和长期反转_加入日期固定效应结果.csv"
-
+OUTPUT_PATH = OUTPUT_DIR / "figure2_收益动态和长期反转_加入日期固定效应.png"
 TABLE2_RESULT_PATH = ROOT / "图表结果" / "01_主线图表" / "表2_收益回归" / "表2_模型汇总.csv"
 
-OUTPUT_PATH = OUTPUT_DIR / "figure2_收益动态和长期反转_加入日期固定效应.png"
-
-
-CUE_COL = "quarterLag1size90plus"
-
-OWN_EA_COLS = (
-    [f"ownEA_tm{i}" for i in range(10, 0, -1)]
-    + ["ownEA"]
-    + [f"ownEA_tp{i}" for i in range(1, 11)]
-)
-
-DISCLOSURE_COLS = [
-    "ownOtherEventER",              # 被提示公司自身专题事件
-    "ownPerformanceForecastBrief",  # 被提示公司自身业绩预告或快报
-]
-
-MEDIA_COLS = [
-    "aesIncrease",
-    "aesDecrease",
-    "logIncreaseAEV",
-    "logDecreaseAEV",
-]
-
-CONTROL_COLS = (
-    OWN_EA_COLS
-    + DISCLOSURE_COLS
-    + MEDIA_COLS
-)
-
-RHS_COLS = [CUE_COL] + CONTROL_COLS
+TABLE2_SPECIFICATION = next(spec for spec in table2_specifications if spec["规格"] == "(6)")
+if (
+    TABLE2_SPECIFICATION["控制变量"] != CONTROL_COLUMNS
+    or set(TABLE2_SPECIFICATION["固定效应"]) != {"date", "firm_yearquarter"}
+):
+    raise ValueError("表2规格（6）已变化，请核对图2的控制变量和固定效应设置。")
 
 HORIZONS = list(range(1, 51))
-START_YEAR = 2005
-END_YEAR = 2025
-
-# 双侧显著性水平与置信区间的对应关系：
-# 1%、5%、10% 显著性水平分别对应 99%、95%、90% 置信区间。
-# 从最长区间到最短区间依次绘制。采用浅灰、蓝灰、深蓝配色，
-# 同时用递增线宽区分层级；不绘制端帽，减少50个点的视觉噪声。
-ERROR_BAR_SPECS = (
-    {
-        "label": "99%置信区间（1%水平）",
-        "critical_value": 2.5758293035489004,
-        "color": "#bdbdbd",
-        "line_width": 0.8,
-        "zorder": 1,
-    },
-    {
-        "label": "95%置信区间（5%水平）",
-        "critical_value": 1.959963984540054,
-        "color": "#78909c",
-        "line_width": 1.6,
-        "zorder": 2,
-    },
-    {
-        "label": "90%置信区间（10%水平）",
-        "critical_value": 1.6448536269514722,
-        "color": "#1f4e79",
-        "line_width": 2.8,
-        "zorder": 3,
-    },
-)
-
 OUTCOME_COLS = {
-    horizon: (
-        f"chAdjreturn_t_tp{horizon}_Recall_w"
-    )
+    horizon: f"chAdjreturn_t_tp{horizon}_Recall_w"
     for horizon in HORIZONS
 }
-
-RESIDUALIZATION_BATCH_SIZE = 4
-
-RESULT_COMPLETION_FIELDS = [
-    "窗口序号",
-    "线索系数",
-    "聚类标准误",
-    "置信区间下界",
-    "置信区间上界",
-    "t值",
-    "p值",
-    "回归样本量",
-    "解释变量矩阵条件数",
-    "系数求解方法",
-    "R方",
+ANCHORS = {1: "[t, t+1]", 10: "[t, t+10]"}
+RESULT_SPECIFICATION = {
+    "口径标识": SPEC_ID,
+    "提示变量": CUE_COLUMN,
+    "新闻来源": NEWS_SOURCE,
+    "表2规格": TABLE2_SPECIFICATION["规格"],
+    "日期固定效应": "是",
+    "被提示公司×年度季度固定效应": "是",
+    "控制变量": "是",
+    "结果单位": "百分点",
+    "有限样本修正": "是",
+}
+NUMERIC_RESULT_FIELDS = [
+    "线索系数", "聚类标准误", "置信区间下界", "置信区间上界",
+    "t值", "p值", "回归样本量", "解释变量矩阵条件数", "R方",
+    "残差自由度", "固定效应实际秩",
 ]
+RESULT_COMPLETION_FIELDS = NUMERIC_RESULT_FIELDS + ["系数求解方法"]
+
+# 从最长到最短绘制三档区间，保留原配色和线宽。
+ERROR_BAR_SPECS = (
+    {"label": "99%置信区间（1%水平）", "confidence_level": 0.99,
+     "color": "#bdbdbd", "line_width": 0.8, "zorder": 1},
+    {"label": "95%置信区间（5%水平）", "confidence_level": 0.95,
+     "color": "#78909c", "line_width": 1.6, "zorder": 2},
+    {"label": "90%置信区间（10%水平）", "confidence_level": 0.90,
+     "color": "#1f4e79", "line_width": 2.8, "zorder": 3},
+)
 
 
-def significance_stars(
-    p_value: float,
-) -> str:
-    """根据双侧检验的 p 值添加显著性星号。"""
-    if p_value < 0.01:
-        return "***"
-    if p_value < 0.05:
-        return "**"
-    if p_value < 0.10:
-        return "*"
-    return ""
+def read_figure2_panel(horizons: list[int]) -> pd.DataFrame:
+    """按与表2完全相同的季度入口和列类型，组装待估计窗口。"""
+    if not horizons or not set(horizons).issubset(HORIZONS):
+        raise ValueError("待估计窗口必须属于1至50。")
+    print(f"读取图2与表2共用的主样本：{SPEC_DESCRIPTION}")
+    pieces = []
+    for block, returns, controls, cue, common in iter_main_blocks():
+        positions = np.flatnonzero(common)
+        frame = pd.DataFrame(controls[positions], columns=CONTROL_COLUMNS)
+        frame["StkcdRecall"] = block["firm"][positions]
+        frame["Trddt"] = pd.to_datetime(block["date"][positions], unit="D", origin="unix")
+        frame["Filling"] = block["filled"][positions]
+        frame[CUE_COLUMN] = cue[positions]
+        # 每个窗口沿用自己的有效收益；不对全部50窗共同删除缺失。
+        for horizon in horizons:
+            frame[OUTCOME_COLS[horizon]] = returns[positions, horizon - 1]
+        pieces.append(frame)
+    if not pieces:
+        raise ValueError("当前沪深300主口径没有可用观测。")
+    data = pd.concat(pieces, ignore_index=True)
+    del pieces
+    data["StkcdRecall"] = data["StkcdRecall"].astype("category")
+    data["yearQuarter"] = data["Trddt"].dt.to_period("Q").astype("category")
+    print(f"沪深300主样本基础观测：{len(data):,}；包含合格填充日起点。")
+    return data
 
 
-def drop_fe_singletons_iteratively(
-    reg: pd.DataFrame,
-    fe_code_cols: list[str],
-) -> tuple[pd.DataFrame, int]:
-    """递归删除任一固定效应维度中的单例组。"""
-    total_removed = 0
-
-    while True:
-        singleton = np.zeros(
-            len(reg),
-            dtype=bool,
-        )
-
-        for column in fe_code_cols:
-            codes = reg[column].to_numpy(
-                dtype=np.int64,
-                copy=False,
-            )
-
-            if len(codes) == 0:
-                raise ValueError(
-                    "删除固定效应单例后没有剩余观测。"
-                )
-
-            if codes.min() < 0:
-                raise ValueError(
-                    f"{column} 中存在无效的负数分组编号。"
-                )
-
-            counts = np.bincount(codes)
-            singleton |= counts[codes] == 1
-
-        removed_now = int(
-            singleton.sum()
-        )
-
-        if removed_now == 0:
-            break
-
-        total_removed += removed_now
-        reg = reg.loc[
-            ~singleton
-        ].copy()
-
-    return reg, total_removed
-
-
-def cluster_score_meat(
-    x: np.ndarray,
-    residuals: np.ndarray,
-    cluster_codes: np.ndarray,
-    cluster_count: int,
-) -> np.ndarray:
-    """计算一个聚类维度的未缩放得分外积和。"""
-    group_scores = np.empty(
-        (
-            cluster_count,
-            x.shape[1],
-        ),
-        dtype=np.float64,
+def run_date_fe_regression(data: pd.DataFrame, horizon: int) -> dict:
+    """直接复用表2规格（6），仅将结果转换为图2的字段和百分点单位。"""
+    outcome = OUTCOME_COLS[horizon]
+    model_row, _ = run_table2_regression(
+        data=data,
+        outcome=outcome,
+        window_label=f"[t, t+{horizon}]",
+        specification=TABLE2_SPECIFICATION,
+        include_diagnostics=True,
     )
-
-    for column in range(
-        x.shape[1]
-    ):
-        group_scores[
-            :,
-            column,
-        ] = np.bincount(
-            cluster_codes,
-            weights=(
-                x[:, column]
-                * residuals
-            ),
-            minlength=cluster_count,
-        )
-
-    return (
-        group_scores.T
-        @ group_scores
-    )
-
-
-def observation_score_meat(
-    x: np.ndarray,
-    residuals: np.ndarray,
-    chunk_size: int = 250_000,
-) -> np.ndarray:
-    """
-    计算公司×日期交集聚类项。
-
-    主样本以被提示公司和交易日期为唯一键，所以交集聚类中的每组
-    只有一条观测。分块计算可以避免构造整张得分矩阵。
-    """
-    meat = np.zeros(
-        (
-            x.shape[1],
-            x.shape[1],
-        ),
-        dtype=np.float64,
-    )
-
-    for start in range(
-        0,
-        len(x),
-        chunk_size,
-    ):
-        stop = min(
-            start + chunk_size,
-            len(x),
-        )
-
-        scores = (
-            x[start:stop]
-            * residuals[
-                start:stop,
-                None,
-            ]
-        )
-
-        meat += (
-            scores.T
-            @ scores
-        )
-
-    return meat
-
-
-def two_way_cluster_covariance(
-    x: np.ndarray,
-    residuals: np.ndarray,
-    firm_codes: np.ndarray,
-    date_codes: np.ndarray,
-    xpx_inverse: np.ndarray,
-) -> np.ndarray:
-    """
-    计算被提示公司和交易日期双向聚类协方差。
-
-    直接使用残差化后的普通最小二乘得分，并利用被提示公司×日期
-    唯一键直接计算交集聚类项。
-    """
-    nobs, nvars = x.shape
-
-    firm_count = (
-        int(firm_codes.max())
-        + 1
-    )
-    date_count = (
-        int(date_codes.max())
-        + 1
-    )
-
-    if firm_count < 2:
-        raise ValueError(
-            "被提示公司聚类数少于2，无法计算聚类标准误。"
-        )
-
-    if date_count < 2:
-        raise ValueError(
-            "日期聚类数少于2，无法计算聚类标准误。"
-        )
-
-    if nobs <= nvars:
-        raise ValueError(
-            "回归观测数不大于解释变量数。"
-        )
-
-    firm_meat = cluster_score_meat(
-        x,
-        residuals,
-        firm_codes,
-        firm_count,
-    )
-
-    date_meat = cluster_score_meat(
-        x,
-        residuals,
-        date_codes,
-        date_count,
-    )
-
-    intersection_meat = (
-        observation_score_meat(
-            x,
-            residuals,
-        )
-    )
-
-    common_scale = (
-        (nobs - 1)
-        / (nobs - nvars)
-    )
-
-    firm_scale = (
-        firm_count
-        / (firm_count - 1)
-        * common_scale
-    )
-
-    date_scale = (
-        date_count
-        / (date_count - 1)
-        * common_scale
-    )
-
-    # 被提示公司×日期是一行一个交集组，因此组数等于样本量。
-    intersection_scale = (
-        nobs
-        / (nobs - 1)
-        * common_scale
-    )
-
-    meat = (
-        firm_scale
-        * firm_meat
-        + date_scale
-        * date_meat
-        - intersection_scale
-        * intersection_meat
-    )
-
-    covariance = (
-        xpx_inverse
-        @ meat
-        @ xpx_inverse
-    )
-
-    return (
-        covariance
-        + covariance.T
-    ) / 2
-
-
-def residualize_regression_data(
-    reg: pd.DataFrame,
-    outcome: str,
-    fe_ids: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    """调用公共季度直接解，并保留本脚本因变量的二维列向量结构。"""
-    y_residualized, x_residualized = residualize_regression_data_shared(
-        reg,
-        outcome,
-        RHS_COLS,
-        fe_ids,
-        batch_size=RESIDUALIZATION_BATCH_SIZE,
-    )
-    return y_residualized.reshape(-1, 1), x_residualized
-
-
-def read_figure2_panel(
-    horizons: list[int],
-) -> pd.DataFrame:
-    """
-    一次读取所有待估计窗口和共同回归变量。
-
-    输入文件较大；一次扫描只读取待估计窗口，可以避免为每个窗口
-    重复扫描同一个文件。恢复运行时，已完成窗口不会再次读入内存。
-    """
-    outcome_columns = [
-        OUTCOME_COLS[horizon]
-        for horizon in horizons
-    ]
-
-    panel_columns = list(
-        dict.fromkeys(
-            [
-                "StkcdRecall",
-                "Trddt",
-                "yearQuarter",
-            ]
-            + RHS_COLS
-            + outcome_columns
-        )
-    )
-
-    available_columns = (
-        pd.read_csv(
-            PATTERN_PATH,
-            nrows=0,
-        )
-        .columns
-        .tolist()
-    )
-
-    missing_columns = sorted(
-        set(panel_columns)
-        - set(available_columns)
-    )
-
-    if missing_columns:
-        raise ValueError(
-            "图2输入文件缺少变量："
-            f"{missing_columns}"
-        )
-
-    panel_dtype = {
-        "StkcdRecall": "string",
-        "yearQuarter": "string",
+    coefficient = model_row["线索系数（百分点）"]
+    standard_error = model_row["聚类标准误（百分点）"]
+    critical_value = float(stats.t.ppf(0.975, model_row["残差自由度"]))
+    return {
+        **RESULT_SPECIFICATION,
+        "口径说明": SPEC_DESCRIPTION,
+        "窗口序号": horizon,
+        "事件窗口": f"[t, t+{horizon}]",
+        "因变量": outcome,
+        "线索系数": coefficient,
+        "聚类标准误": standard_error,
+        "置信区间下界": coefficient - critical_value * standard_error,
+        "置信区间上界": coefficient + critical_value * standard_error,
         **{
-            column: "float32"
-            for column in (
-                RHS_COLS
-                + outcome_columns
+            field: model_row[field]
+            for field in (
+                "t值", "p值", "显著性", "回归样本量", "被提示公司聚类数",
+                "日期聚类数", "删除单例组观测数", "正提示公司日数",
+                "填充起始日数", "残差自由度", "固定效应实际秩",
+                "解释变量矩阵条件数", "系数求解方法", "R方",
             )
         },
     }
 
-    print(
-        "读取加入日期固定效应的图2主样本……"
-    )
 
-    data = pd.read_csv(
-        PATTERN_PATH,
-        usecols=panel_columns,
-        dtype=panel_dtype,
-        parse_dates=["Trddt"],
-    )
-    data["StkcdRecall"] = (
-        data["StkcdRecall"]
-        .str.strip()
-        .str.zfill(6)
-    )
-
-    valid_key = (
-        data[
-            [
-                "StkcdRecall",
-                "Trddt",
-            ]
-        ]
-        .notna()
-        .all(axis=1)
-    )
-
-    if data.loc[
-        valid_key
-    ].duplicated(
-        [
-            "StkcdRecall",
-            "Trddt",
-        ]
-    ).any():
-        raise ValueError(
-            "图2主样本的被提示公司和交易日期不是唯一键。"
-        )
-
-    data = data.loc[
-        data["Trddt"].dt.year.between(START_YEAR, END_YEAR)
-    ]
-
-    # 两个分组在所有窗口中定义相同。预先编号可以避免50次重复
-    # 分组；窗口筛选只会删除行，不会改变组的归属。
-    valid_firm_yearquarter = (
-        data[
-            [
-                "StkcdRecall",
-                "yearQuarter",
-            ]
-        ]
-        .notna()
-        .all(axis=1)
-    )
-
-    data[
-        "_fe_firm_yearquarter_all"
-    ] = np.int32(-1)
-
-    firm_yearquarter_codes = (
-        data.loc[
-            valid_firm_yearquarter
-        ]
-        .groupby(
-            [
-                "StkcdRecall",
-                "yearQuarter",
-            ],
-            observed=True,
-            sort=False,
-        )
-        .ngroup()
-        .astype("int32")
-    )
-
-    data.loc[
-        valid_firm_yearquarter,
-        "_fe_firm_yearquarter_all",
-    ] = firm_yearquarter_codes.to_numpy(
-        dtype=np.int32,
-        copy=False,
-    )
-
-    data[
-        "_fe_firm_yearquarter_all"
-    ] = data[
-        "_fe_firm_yearquarter_all"
-    ].astype("int32")
-
-    data["_fe_date_all"] = (
-        pd.factorize(
-            data["Trddt"],
-            sort=False,
-        )[0]
-        .astype("int32")
-    )
-
-    data["StkcdRecall"] = (
-        data["StkcdRecall"]
-        .astype("category")
-    )
-
-    data["yearQuarter"] = (
-        data["yearQuarter"]
-        .astype("category")
-    )
-
-    return data
-
-
-def run_date_fe_regression(
-    data: pd.DataFrame,
-    horizon: int,
-) -> dict:
-    """估计一个事件窗口的日期固定效应版图2回归。"""
-    outcome = OUTCOME_COLS[
-        horizon
-    ]
-
-    needed = list(
-        dict.fromkeys(
-            [
-                outcome,
-                "StkcdRecall",
-                "Trddt",
-                "yearQuarter",
-                "_fe_firm_yearquarter_all",
-                "_fe_date_all",
-            ]
-            + RHS_COLS
-        )
-    )
-
-    # 逐列检查缺失，避免生成整张缺失标记表和额外的显式复制。
-    valid_rows = np.ones(len(data), dtype=bool)
-    for col in needed:
-        valid_rows &= data[col].notna().to_numpy()
-
-    reg = data.loc[valid_rows, needed]
-    del valid_rows
-
-    reg[
-        "_fe_firm_yearquarter"
-    ] = reg[
-        "_fe_firm_yearquarter_all"
-    ].astype("int64")
-
-    reg["_fe_date"] = (
-        reg["_fe_date_all"]
-        .astype("int64")
-    )
-
-    reg, singleton_removed = (
-        drop_fe_singletons_iteratively(
-            reg,
-            [
-                "_fe_firm_yearquarter",
-                "_fe_date",
-            ],
-        )
-    )
-
-    fe_ids = np.column_stack(
-        [
-            reg[
-                "_fe_firm_yearquarter"
-            ].to_numpy(
-                dtype=np.int64,
-                copy=False,
-            ),
-            reg["_fe_date"].to_numpy(
-                dtype=np.int64,
-                copy=False,
-            ),
-        ]
-    )
-
-    firm_codes = pd.factorize(
-        reg["StkcdRecall"],
-        sort=False,
-    )[0].astype(
-        np.int64,
-        copy=False,
-    )
-
-    date_codes = pd.factorize(
-        reg["Trddt"],
-        sort=False,
-    )[0].astype(
-        np.int64,
-        copy=False,
-    )
-
-    (
-        y_residualized,
-        x_residualized,
-    ) = residualize_regression_data(
-        reg,
-        outcome,
-        fe_ids,
-    )
-
-    xpx = (
-        x_residualized.T
-        @ x_residualized
-    )
-
-    xpy = (
-        x_residualized.T
-        @ y_residualized
-    )
-
-    xpx_condition = float(
-        np.linalg.cond(xpx)
-    )
-
-    if (
-        np.isfinite(
-            xpx_condition
-        )
-        and xpx_condition < 1e12
-    ):
-        parameters = np.linalg.solve(
-            xpx,
-            xpy,
-        ).reshape(-1)
-
-        xpx_inverse = (
-            np.linalg.inv(xpx)
-        )
-
-        coefficient_solver = (
-            "正规方程（条件数已检查）"
-        )
-    else:
-        parameters = np.linalg.lstsq(
-            x_residualized,
-            y_residualized,
-            rcond=None,
-        )[0].reshape(-1)
-
-        xpx_inverse = (
-            np.linalg.pinv(xpx)
-        )
-
-        coefficient_solver = (
-            "最小二乘分解"
-        )
-
-    residuals = (
-        y_residualized.reshape(-1)
-        - x_residualized
-        @ parameters
-    )
-
-    covariance = (
-        two_way_cluster_covariance(
-            x_residualized,
-            residuals,
-            firm_codes,
-            date_codes,
-            xpx_inverse,
-        )
-    )
-
-    variances = np.diag(
-        covariance
-    )
-
-    if (
-        variances
-        < -1e-12
-    ).any():
-        raise ValueError(
-            f"窗口 {horizon} 出现明显为负的协方差对角元素。"
-        )
-
-    standard_errors = np.sqrt(
-        np.maximum(
-            variances,
-            0.0,
-        )
-    )
-
-    cue_position = (
-        RHS_COLS.index(
-            CUE_COL
-        )
-    )
-
-    coefficient_raw = float(
-        parameters[
-            cue_position
-        ]
-    )
-
-    standard_error_raw = float(
-        standard_errors[
-            cue_position
-        ]
-    )
-
-    if (
-        not np.isfinite(
-            standard_error_raw
-        )
-        or standard_error_raw <= 0
-    ):
-        raise ValueError(
-            f"窗口 {horizon} 的核心变量标准误无效。"
-        )
-
-    t_value = (
-        coefficient_raw
-        / standard_error_raw
-    )
-
-    nobs = len(reg)
-
-    absorbed_parameter_count = (
-        reg[
-            "_fe_firm_yearquarter"
-        ].nunique()
-        + reg["_fe_date"].nunique()
-        - 1
-    )
-
-    model_parameter_count = int(
-        absorbed_parameter_count
-        + x_residualized.shape[1]
-    )
-
-    residual_degrees = (
-        nobs
-        - model_parameter_count
-    )
-
-    if residual_degrees <= 0:
-        raise ValueError(
-            f"窗口 {horizon} 的残差自由度不为正。"
-        )
-
-    p_value = float(
-        2
-        * stats.t.sf(
-            abs(t_value),
-            residual_degrees,
-        )
-    )
-
-    original_y = reg[
-        outcome
-    ].to_numpy(
-        dtype=np.float64,
-        copy=True,
-    )
-
-    centered_y = (
-        original_y
-        - original_y.mean()
-    )
-
-    residual_sum_squares = float(
-        residuals
-        @ residuals
-    )
-
-    total_sum_squares = float(
-        centered_y
-        @ centered_y
-    )
-
-    if total_sum_squares <= 0:
-        raise ValueError(
-            f"窗口 {horizon} 的因变量没有有效变异。"
-        )
-
-    r_squared = max(
-        (
-            1
-            - residual_sum_squares
-            / total_sum_squares
-        ),
-        0.0,
-    )
-
-    # 原始收益以小数存储；图2和结果表统一转换为百分点。
-    coefficient = (
-        coefficient_raw
-        * 100
-    )
-
-    standard_error = (
-        standard_error_raw
-        * 100
-    )
-
-    row = {
-        "窗口序号": horizon,
-        "事件窗口": (
-            f"[t, t+{horizon}]"
-        ),
-        "因变量": outcome,
-        "结果单位": "百分点",
-        "线索系数": coefficient,
-        "聚类标准误": standard_error,
-        "置信区间下界": (
-            coefficient
-            - 1.96
-            * standard_error
-        ),
-        "置信区间上界": (
-            coefficient
-            + 1.96
-            * standard_error
-        ),
-        "t值": t_value,
-        "p值": p_value,
-        "显著性": (
-            significance_stars(
-                p_value
-            )
-        ),
-        "控制变量": "是",
-        "日期固定效应": "是",
-        "被提示公司×年度季度固定效应": "是",
-        "有限样本修正": "是",
-        "回归样本量": nobs,
-        "被提示公司聚类数": int(
-            reg[
-                "StkcdRecall"
-            ].nunique()
-        ),
-        "日期聚类数": int(
-            reg["Trddt"].nunique()
-        ),
-        "删除单例组观测数": (
-            singleton_removed
-        ),
-        "解释变量矩阵条件数": (
-            xpx_condition
-        ),
-        "系数求解方法": (
-            coefficient_solver
-        ),
-        "R方": r_squared,
-    }
-
-    del (
-        fe_ids,
-        firm_codes,
-        date_codes,
-        covariance,
-        variances,
-        xpx,
-        xpy,
-        xpx_inverse,
-        x_residualized,
-        y_residualized,
-        parameters,
-        standard_errors,
-        residuals,
-        original_y,
-        centered_y,
-        reg,
-    )
-
-    gc.collect()
-
-    return row
-
-
-def save_results(
-    rows: list[dict],
-) -> pd.DataFrame:
-    """按窗口排序并保存结构化结果。"""
-    results = (
-        pd.DataFrame(rows)
-        .drop_duplicates(
-            "窗口序号",
-            keep="last",
-        )
-        .sort_values(
-            "窗口序号"
-        )
-        .reset_index(
-            drop=True
-        )
-    )
-
-    RESULT_PATH.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    temporary_path = (
-        RESULT_PATH.with_suffix(
-            RESULT_PATH.suffix
-            + ".tmp"
-        )
-    )
-
-    results.to_csv(
-        temporary_path,
-        index=False,
-        encoding="utf-8-sig",
-    )
-
-    temporary_path.replace(
-        RESULT_PATH
-    )
-
-    return results
-
-
-def load_completed_rows(
-    resume: bool,
-) -> list[dict]:
-    """
-    读取可安全续算的已有结果。
-
-    只有核心结果和诊断字段都完整的窗口才视为已完成；字段不完整的
-    旧窗口会从续算结果中移除，并进入待估计列表。
-    """
-    if (
-        not resume
-        or not RESULT_PATH.exists()
-    ):
-        return []
-
-    existing = pd.read_csv(
-        RESULT_PATH
-    )
-
-    if existing.empty:
-        return []
-
-    if "窗口序号" not in existing:
-        raise ValueError(
-            "已有图2结果缺少“窗口序号”，无法继续估计。"
-        )
-
-    if (
-        "日期固定效应"
-        in existing
-        and not existing[
-            "日期固定效应"
-        ]
-        .dropna()
-        .astype(str)
-        .eq("是")
-        .all()
-    ):
-        raise ValueError(
-            "已有结果包含非日期固定效应版本，不能继续估计。"
-        )
-
-    invalid_horizons = sorted(
-        set(
-            existing[
-                "窗口序号"
-            ]
-            .dropna()
-            .astype(int)
-        )
-        - set(HORIZONS)
-    )
-
-    if invalid_horizons:
-        raise ValueError(
-            "已有结果包含无效窗口："
-            f"{invalid_horizons}"
-        )
-
-    for column in (
-        RESULT_COMPLETION_FIELDS
-        + [
-            "日期固定效应",
-            "被提示公司×年度季度固定效应",
-            "控制变量",
-            "结果单位",
-            "有限样本修正",
-        ]
-    ):
-        if column not in existing:
-            existing[column] = np.nan
-
-    complete_mask = (
-        existing[
-            RESULT_COMPLETION_FIELDS
-        ]
-        .notna()
-        .all(axis=1)
-        & existing[
-            "日期固定效应"
-        ]
-        .astype(str)
-        .eq("是")
-        & existing[
-            "被提示公司×年度季度固定效应"
-        ]
-        .astype(str)
-        .eq("是")
-        & existing[
-            "控制变量"
-        ]
-        .astype(str)
-        .eq("是")
-        & existing[
-            "结果单位"
-        ]
-        .astype(str)
-        .eq("百分点")
-        & existing[
-            "有限样本修正"
-        ]
-        .astype(str)
-        .eq("是")
-    )
-
-    incomplete_horizons = sorted(
-        existing.loc[
-            ~complete_mask,
-            "窗口序号",
-        ]
-        .dropna()
-        .astype(int)
-        .tolist()
-    )
-
-    if incomplete_horizons:
-        print(
-            "以下已有窗口的字段不完整，"
-            "将自动重新估计："
-            f"{incomplete_horizons}"
-        )
-
-    completed = (
-        existing.loc[
-            complete_mask
-        ]
-        .drop_duplicates(
-            "窗口序号",
-            keep="last",
-        )
-        .sort_values(
-            "窗口序号"
-        )
-    )
-
-    return completed.to_dict(
-        "records"
-    )
-
-
-def validate_results(
-    results: pd.DataFrame,
-) -> None:
-    """在绘图前检查50个窗口及统计字段是否完整。"""
-    if len(results) != len(
-        HORIZONS
-    ):
-        raise ValueError(
-            "日期固定效应版图2结果未包含全部50个窗口。"
-        )
-
-    actual_horizons = (
-        results[
-            "窗口序号"
-        ]
-        .astype(int)
-        .tolist()
-    )
-
-    if actual_horizons != HORIZONS:
-        raise ValueError(
-            "日期固定效应版图2的窗口不完整或顺序错误。"
-        )
-
-    required_flags = {
-        "日期固定效应": "是",
-        "被提示公司×年度季度固定效应": "是",
-        "控制变量": "是",
-        "结果单位": "百分点",
-        "有限样本修正": "是",
-    }
-
-    for column, expected in (
-        required_flags.items()
-    ):
-        values = set(
-            results[column]
-            .dropna()
-            .astype(str)
-        )
-
-        if values != {
-            expected
-        }:
+def validate_result_specification(results: pd.DataFrame) -> None:
+    """在筛除不完整窗口之前检查每一行，拒绝旧口径或混合口径续算。"""
+    for column, expected in RESULT_SPECIFICATION.items():
+        if column not in results or not results[column].astype(str).eq(expected).all():
             raise ValueError(
-                f"{column} 的结果标记不正确。"
+                f"已有图2结果的“{column}”与当前表2口径不一致，不能续算。"
+                "请不带 --resume（续算参数）从头运行；旧文件不会在检查时被删除。"
             )
 
-    numeric_columns = [
-        "线索系数",
-        "聚类标准误",
-        "置信区间下界",
-        "置信区间上界",
-        "t值",
-        "p值",
-        "回归样本量",
-        "解释变量矩阵条件数",
-        "R方",
-    ]
 
-    numeric_values = results[
-        numeric_columns
-    ].to_numpy(
-        dtype=np.float64,
-    )
-
-    if not np.isfinite(
-        numeric_values
-    ).all():
-        raise ValueError(
-            "日期固定效应版图2包含缺失或非有限数值。"
-        )
-
+def validate_result_rows(results: pd.DataFrame) -> None:
+    """检查一批完整窗口，可用于保存中间进度及最终绘图。"""
+    validate_result_specification(results)
+    horizons = pd.to_numeric(results["窗口序号"], errors="raise")
+    if not horizons.isin(HORIZONS).all() or horizons.duplicated().any():
+        raise ValueError("图2包含无效或重复窗口。")
+    values = results[NUMERIC_RESULT_FIELDS].to_numpy(dtype=np.float64)
+    if not np.isfinite(values).all():
+        raise ValueError("图2结果包含缺失或非有限数值。")
+    if not (results["聚类标准误"] > 0).all() or not (results["残差自由度"] > 0).all():
+        raise ValueError("图2结果的标准误或残差自由度必须为正数。")
+    if not results["p值"].between(0, 1).all():
+        raise ValueError("图2结果包含无效p值。")
     if not (
-        results[
-            "聚类标准误"
+        (results["置信区间下界"] <= results["线索系数"])
+        & (results["线索系数"] <= results["置信区间上界"])
+    ).all():
+        raise ValueError("图2结果包含无效置信区间。")
+    if results["系数求解方法"].isna().any():
+        raise ValueError("图2结果缺少系数求解方法。")
+
+
+def load_table2_reference() -> pd.DataFrame:
+    """估计前确认当前口径的两个表2锚点均存在。"""
+    if not TABLE2_RESULT_PATH.is_file():
+        raise FileNotFoundError(
+            f"找不到表2模型汇总：{TABLE2_RESULT_PATH}。请先运行当前口径的表2。"
+        )
+    table2 = pd.read_csv(TABLE2_RESULT_PATH)
+    required = {
+        "样本", "收益窗口", "规格", "口径标识", "提示变量",
+        "线索系数（百分点）", "聚类标准误（百分点）", "回归样本量",
+    }
+    missing = sorted(required - set(table2.columns))
+    if missing:
+        raise ValueError(f"表2模型汇总缺少当前口径校验字段：{missing}。请重新运行表2。")
+    for window_label in ANCHORS.values():
+        expected = table2.loc[
+            table2["样本"].eq("pattern")
+            & table2["收益窗口"].eq(window_label)
+            & table2["规格"].eq(TABLE2_SPECIFICATION["规格"])
         ]
-        > 0
-    ).all():
-        raise ValueError(
-            "日期固定效应版图2包含非正标准误。"
-        )
-
-    if not results[
-        "p值"
-    ].between(
-        0,
-        1,
-    ).all():
-        raise ValueError(
-            "日期固定效应版图2包含无效p值。"
-        )
-
-    interval_valid = (
-        (
-            results[
-                "置信区间下界"
-            ]
-            <= results[
-                "线索系数"
-            ]
-        )
-        & (
-            results[
-                "线索系数"
-            ]
-            <= results[
-                "置信区间上界"
-            ]
-        )
-    )
-
-    if not interval_valid.all():
-        raise ValueError(
-            "日期固定效应版图2包含无效置信区间。"
-        )
-
-    if results[
-        "系数求解方法"
-    ].isna().any():
-        raise ValueError(
-            "日期固定效应版图2缺少系数求解方法。"
-        )
+        if len(expected) != 1:
+            raise ValueError(f"表2中无法找到唯一的{window_label}规格（6）锚点。")
+        if (
+            not expected["口径标识"].eq(SPEC_ID).all()
+            or not expected["提示变量"].eq(CUE_COLUMN).all()
+        ):
+            raise ValueError("表2模型汇总仍是其他口径，请先重新运行当前表2。")
+        numeric = expected[
+            ["线索系数（百分点）", "聚类标准误（百分点）", "回归样本量"]
+        ].to_numpy(dtype=np.float64)
+        if (
+            not np.isfinite(numeric).all()
+            or numeric[0, 1] <= 0
+            or numeric[0, 2] <= 0
+            or numeric[0, 2] != int(numeric[0, 2])
+        ):
+            raise ValueError(f"表2的{window_label}锚点含有无效系数、标准误或样本量。")
+    return table2
 
 
 def validate_against_table2(
     results: pd.DataFrame,
-    horizons_to_check: set[int]
-    | None = None,
+    horizons_to_check: set[int] | None = None,
+    *,
+    table2: pd.DataFrame,
 ) -> None:
-    """
-    用表2模式公司主样本规格（6）的两个收益窗口交叉校验。
-
-    表2中的系数和标准误同时控制交易日期固定效应与
-    被提示公司×年度季度固定效应，并采用相同的双向聚类和
-    有限样本修正，因此可作为图2第1和第10窗口的直接锚点。
-    """
-    if not TABLE2_RESULT_PATH.exists():
-        print(
-            "未找到表2模型汇总，"
-            "跳过第1和第10窗口的交叉校验。"
-        )
-        return
-
-    table2 = pd.read_csv(
-        TABLE2_RESULT_PATH
-    )
-
-    required_columns = {
-        "样本",
-        "收益窗口",
-        "规格",
-        "线索系数（百分点）",
-        "聚类标准误（百分点）",
-        "回归样本量",
-    }
-
-    missing_columns = sorted(
-        required_columns
-        - set(table2.columns)
-    )
-
-    if missing_columns:
-        raise ValueError(
-            "表2模型汇总缺少交叉校验字段："
-            f"{missing_columns}"
-        )
-
-    anchors = {
-        "[t, t+1]": 1,
-        "[t, t+10]": 10,
-    }
-
+    """按原容差校验第1、第10窗口的系数、标准误及精确样本量。"""
+    validate_result_specification(results)
     if horizons_to_check is None:
-        horizons_to_check = set(
-            anchors.values()
-        )
-
-    invalid_horizons = (
-        set(
-            horizons_to_check
-        )
-        - set(
-            anchors.values()
-        )
-    )
-
-    if invalid_horizons:
-        raise ValueError(
-            "表2锚点校验收到无效窗口："
-            f"{sorted(invalid_horizons)}"
-        )
-
-    checked_labels = []
-
-    for window_label, horizon in (
-        anchors.items()
-    ):
-        if horizon not in (
-            horizons_to_check
-        ):
+        horizons_to_check = set(ANCHORS)
+    if not set(horizons_to_check).issubset(ANCHORS):
+        raise ValueError("表2锚点校验只接受第1和第10窗口。")
+    checked = []
+    for horizon, window_label in ANCHORS.items():
+        if horizon not in horizons_to_check:
             continue
-
         expected = table2.loc[
-            table2[
-                "样本"
-            ]
-            .astype(str)
-            .eq("pattern")
-            & table2[
-                "收益窗口"
-            ]
-            .astype(str)
-            .eq(window_label)
-            & table2[
-                "规格"
-            ]
-            .astype(str)
-            .eq("(6)")
+            table2["样本"].eq("pattern")
+            & table2["收益窗口"].eq(window_label)
+            & table2["规格"].eq(TABLE2_SPECIFICATION["规格"])
         ]
-
-        actual = results.loc[
-            results[
-                "窗口序号"
-            ].eq(horizon)
-        ]
-
+        actual = results.loc[results["窗口序号"].eq(horizon)]
+        if len(expected) != 1 or len(actual) != 1:
+            raise ValueError(f"{window_label}无法完成表2规格（6）交叉校验。")
         if (
-            len(expected) != 1
-            or len(actual) != 1
+            not expected["口径标识"].eq(SPEC_ID).all()
+            or not expected["提示变量"].eq(CUE_COLUMN).all()
         ):
-            raise ValueError(
-                f"{window_label} 无法完成表2规格（6）交叉校验。"
-            )
-
-        comparisons = {
-            "线索系数": (
-                "线索系数（百分点）"
-            ),
-            "聚类标准误": (
-                "聚类标准误（百分点）"
-            ),
-        }
-
+            raise ValueError("表2锚点与当前主回归口径不一致。")
         for actual_column, expected_column in (
-            comparisons.items()
+            ("线索系数", "线索系数（百分点）"),
+            ("聚类标准误", "聚类标准误（百分点）"),
         ):
-            if not np.isclose(
-                float(
-                    actual.iloc[
-                        0
-                    ][
-                        actual_column
-                    ]
-                ),
-                float(
-                    expected.iloc[
-                        0
-                    ][
-                        expected_column
-                    ]
-                ),
-                rtol=1e-6,
-                atol=1e-8,
-            ):
+            actual_value = float(actual.iloc[0][actual_column])
+            expected_value = float(expected.iloc[0][expected_column])
+            if not np.isclose(actual_value, expected_value, rtol=1e-6, atol=1e-8):
                 raise ValueError(
-                    f"{window_label} 的{actual_column}"
-                    "与表2模式公司主样本规格（6）不一致。"
+                    f"{window_label}的{actual_column}与表2规格（6）不一致："
+                    f"图2={actual_value:.12g}，表2={expected_value:.12g}。"
                 )
+        if float(actual.iloc[0]["回归样本量"]) != float(expected.iloc[0]["回归样本量"]):
+            raise ValueError(f"{window_label}的回归样本量与表2规格（6）不一致。")
+        checked.append(window_label)
+    if checked:
+        print(f"{'、'.join(checked)}已通过表2模式公司主样本规格（6）交叉校验。")
 
-        if int(
-            actual.iloc[
-                0
-            ][
-                "回归样本量"
-            ]
-        ) != int(
-            expected.iloc[
-                0
-            ][
-                "回归样本量"
-            ]
-        ):
-            raise ValueError(
-                f"{window_label} 的回归样本量"
-                "与表2模式公司主样本规格（6）不一致。"
-            )
 
-        checked_labels.append(
-            window_label
-        )
-
-    print(
-        f"{'、'.join(checked_labels)}"
-        "已通过表2"
-        "模式公司主样本规格（6）交叉校验。"
+def save_results(rows: list[dict], *, table2: pd.DataFrame) -> pd.DataFrame:
+    """先校验候选结果，再原子替换进度文件，避免保存失败的锚点。"""
+    results = (
+        pd.DataFrame(rows)
+        .sort_values("窗口序号")
+        .reset_index(drop=True)
     )
+    validate_result_rows(results)
+    anchors_present = set(results["窗口序号"]) & set(ANCHORS)
+    validate_against_table2(results, anchors_present, table2=table2)
+    RESULT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = RESULT_PATH.with_suffix(RESULT_PATH.suffix + ".tmp")
+    results.to_csv(temporary_path, index=False, encoding="utf-8-sig")
+    temporary_path.replace(RESULT_PATH)
+    return results
+
+
+def load_completed_rows(resume: bool) -> list[dict]:
+    """仅接受当前口径；同口径的缺失诊断窗口重新估计。"""
+    if not resume or not RESULT_PATH.exists():
+        return []
+    existing = pd.read_csv(RESULT_PATH)
+    if existing.empty:
+        return []
+    validate_result_specification(existing)
+    if "窗口序号" not in existing:
+        raise ValueError("已有图2结果缺少窗口序号，无法续算。")
+    horizons = pd.to_numeric(existing["窗口序号"], errors="raise")
+    if not horizons.isin(HORIZONS).all():
+        raise ValueError("已有图2结果的窗口序号必须为1至50的整数。")
+    existing["窗口序号"] = horizons.astype(int)
+    for column in RESULT_COMPLETION_FIELDS:
+        if column not in existing:
+            existing[column] = np.nan
+    numeric = existing[NUMERIC_RESULT_FIELDS].apply(pd.to_numeric, errors="coerce")
+    existing[NUMERIC_RESULT_FIELDS] = numeric
+    complete = (
+        np.isfinite(numeric.to_numpy(dtype=np.float64)).all(axis=1)
+        & existing["系数求解方法"].notna()
+    )
+    incomplete_horizons = existing.loc[~complete, "窗口序号"].tolist()
+    if incomplete_horizons:
+        print(f"以下已有窗口的统计或诊断字段不完整，将重新估计：{incomplete_horizons}")
+    completed = (
+        existing.loc[complete]
+        .drop_duplicates("窗口序号", keep="last")
+        .sort_values("窗口序号")
+    )
+    if not completed.empty:
+        validate_result_rows(completed)
+    return completed.to_dict("records")
+
+
+def validate_results(results: pd.DataFrame) -> None:
+    """最终绘图必须有顺序完整的50个窗口。"""
+    validate_result_rows(results)
+    if results["窗口序号"].tolist() != HORIZONS:
+        raise ValueError("日期固定效应版图2未包含顺序完整的50个窗口。")
 
 
 def draw_figure2_date_fe(
@@ -1504,11 +427,11 @@ def draw_figure2_date_fe(
         dtype=np.float64,
     )
 
+    degrees = plot_data["残差自由度"].to_numpy(dtype=np.float64)
+
     for spec in ERROR_BAR_SPECS:
-        interval_radius = (
-            spec["critical_value"]
-            * standard_errors
-        )
+        critical_values = stats.t.ppf((1 + spec["confidence_level"]) / 2, degrees)
+        interval_radius = critical_values * standard_errors
         axis.vlines(
             x_values,
             coefficients
@@ -1530,10 +453,7 @@ def draw_figure2_date_fe(
         )
 
     # 与图中90%置信区间一致，判断10%水平显著性
-    significant = (
-        np.abs(coefficients)
-        > 1.6448536269514722 * standard_errors
-    )
+    significant = plot_data["p值"].to_numpy(dtype=np.float64) < 0.10
 
     # 显著用红色，其余用黑色
     point_colors = np.where(significant, "#d62728", "#1a1a1a")
@@ -1562,7 +482,8 @@ def draw_figure2_date_fe(
     )
 
     axis.set_title(
-        "收益动态和长期反转\n"
+        "收益动态和长期反转：历史沪深300提示\n"
+        "个人365天排除；数行者分段新闻；合格填充日起点；全部年份\n"
         "固定效应：被提示公司×年度季度；交易日期（事件起点）",
         fontsize=12,
     )
@@ -1639,177 +560,55 @@ def draw_figure2_date_fe(
 
 def parse_args() -> argparse.Namespace:
     """读取命令行参数。"""
-    parser = argparse.ArgumentParser(
-        description=(
-            "估计并绘制加入交易日期固定效应的图2。"
-        )
-    )
-
+    parser = argparse.ArgumentParser(description="按当前表2主规格估计并绘制图2。")
     parser.add_argument(
         "--resume",
         action="store_true",
-        help=(
-            "从已有的完整窗口结果继续估计。"
-        ),
+        help="仅从口径标识和诊断完整的当前结果续算；更改口径后请从头运行。",
     )
-
     return parser.parse_args()
 
 
 def main() -> None:
-    """运行50个收益窗口并生成独立的日期固定效应版图2。"""
+    """运行50个窗口；通过表2锚点校验后保存进度和绘图。"""
     args = parse_args()
-
-    existing_rows = (
-        load_completed_rows(
-            resume=args.resume,
-        )
-    )
-
-    completed = {
-        int(
-            row[
-                "窗口序号"
-            ]
-        )
-        for row in existing_rows
-    }
-
-    completed_anchor_horizons = (
-        completed
-        & {
-            1,
-            10,
-        }
-    )
-
-    if completed_anchor_horizons:
+    table2 = load_table2_reference()
+    existing_rows = load_completed_rows(resume=args.resume)
+    completed = {int(row["窗口序号"]) for row in existing_rows}
+    completed_anchors = completed & set(ANCHORS)
+    if completed_anchors:
         validate_against_table2(
-            pd.DataFrame(
-                existing_rows
-            ),
-            horizons_to_check=(
-                completed_anchor_horizons
-            ),
+            pd.DataFrame(existing_rows), completed_anchors, table2=table2,
         )
-
-    pending = [
-        horizon
-        for horizon in HORIZONS
-        if horizon
-        not in completed
-    ]
-
+    pending = [horizon for horizon in HORIZONS if horizon not in completed]
+    rows = existing_rows.copy()
     if pending:
-        data = read_figure2_panel(
-            pending
-        )
-
-        rows = (
-            existing_rows.copy()
-        )
-
-        for position, horizon in enumerate(
-            pending,
-            start=1,
-        ):
+        data = read_figure2_panel(pending)
+        for position, horizon in enumerate(pending, start=1):
             print(
-                "正在运行加入日期固定效应的图2："
-                f"[t, t+{horizon}]"
-                "（待估计窗口 "
-                f"{position}/{len(pending)}）"
+                f"正在运行加入日期固定效应的图2：[t, t+{horizon}]"
+                f"（待估计窗口 {position}/{len(pending)}）"
             )
-
-            row = (
-                run_date_fe_regression(
-                    data,
-                    horizon,
-                )
-            )
-
-            rows = [
-                existing_row
-                for existing_row in rows
-                if int(
-                    existing_row[
-                        "窗口序号"
-                    ]
-                )
-                != horizon
-            ]
-
-            rows.append(
-                row
-            )
-
-            results = (
-                save_results(
-                    rows
-                )
-            )
-
-            if horizon in {
-                1,
-                10,
-            }:
-                validate_against_table2(
-                    results,
-                    horizons_to_check={
-                        horizon
-                    },
-                )
-
+            row = run_date_fe_regression(data, horizon)
+            # 保存函数会先检查锚点；不一致时保留磁盘上先前的进度。
+            results = save_results(rows + [row], table2=table2)
+            rows.append(row)
             print(
-                f"窗口 {horizon} 完成："
-                f"系数={row['线索系数']:.6f}，"
+                f"窗口 {horizon} 完成：系数={row['线索系数']:.6f}，"
                 f"标准误={row['聚类标准误']:.6f}"
             )
-
-            # 当前因变量已完成后立即释放，降低后续回归的常驻内存。
-            data.drop(
-                columns=[
-                    OUTCOME_COLS[
-                        horizon
-                    ]
-                ],
-                inplace=True,
-            )
-
+            data.drop(columns=[OUTCOME_COLS[horizon]], inplace=True)
             gc.collect()
-
         del data
         gc.collect()
     else:
-        print(
-            "已有结果包含全部50个完整窗口，"
-            "无需重新估计。"
-        )
-
-        results = save_results(
-            existing_rows
-        )
-
-    validate_results(
-        results
-    )
-
-    validate_against_table2(
-        results
-    )
-
-    draw_figure2_date_fe(
-        results
-    )
-
-    print(
-        "日期固定效应版图2结果已保存："
-        f"{RESULT_PATH}"
-    )
-
-    print(
-        "日期固定效应版图2已保存："
-        f"{OUTPUT_PATH}"
-    )
+        print("已有结果包含全部50个完整窗口，无需重新估计。")
+        results = pd.DataFrame(rows).sort_values("窗口序号").reset_index(drop=True)
+    validate_results(results)
+    validate_against_table2(results, table2=table2)
+    draw_figure2_date_fe(results)
+    print(f"日期固定效应版图2结果已保存：{RESULT_PATH}")
+    print(f"日期固定效应版图2已保存：{OUTPUT_PATH}")
 
 
 if __name__ == "__main__":

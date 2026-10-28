@@ -9,6 +9,7 @@
 
 仅估计当前选定的模式关系主样本。保留两日、十一日窗口和六列递进
 结构，第（6）列为公司×年度季度＋日期双固定效应主规格，共12个模型。
+收益完整资格只检查两日、十一日窗口，不额外要求三日后、五日后窗口完整。
 收益沿用原全样本双侧1%缩尾值。各模型按自身固定效应递归删单例；
 协方差有限样本修正和精确残差自由度与图2统一。
 模型汇总一行代表“样本×收益窗口×规格”，系数明细再按变量展开。
@@ -266,7 +267,9 @@ def exact_fixed_effect_rank(reg, fe_code_cols):
     return len(left_groups) + len(right_groups) - int(components)
 
 
-def figure2_consistent_inference(model, result, clusters, reg, fe_code_cols):
+def figure2_consistent_inference(
+    model, result, clusters, reg, fe_code_cols, *, include_diagnostics=False,
+):
     """点估计保留原估计器，另按图2的修正及精确自由度计算全部斜率推断。
 
     显式常数＋提示＋27控制时，聚类协方差分母为N−29，不在这个分母
@@ -279,7 +282,8 @@ def figure2_consistent_inference(model, result, clusters, reg, fe_code_cols):
         raise ValueError("吸收后解释变量与已估计参数的列顺序不一致。")
     x = absorbed.to_numpy(dtype="float64", copy=False)
     xpx = x.T @ x
-    if not np.isfinite(xpx).all() or np.linalg.cond(xpx) >= 1e12:
+    xpx_condition = float(np.linalg.cond(xpx)) if np.isfinite(xpx).all() else np.inf
+    if not np.isfinite(xpx_condition) or xpx_condition >= 1e12:
         raise ValueError("吸收后的解释变量矩阵不满秩或条件数过大。")
     # 复用正式图2公共函数，分块累计得分；不另生成一份全样本伪逆。
     covariance = two_way_cluster_covariance(
@@ -306,6 +310,9 @@ def figure2_consistent_inference(model, result, clusters, reg, fe_code_cols):
         "t值": t_values,
         "p值": 2 * stats.t.sf(np.abs(t_values), degrees),
     })
+    # 原有调用默认仍返回三项；图2可额外取得实际矩阵条件数。
+    if include_diagnostics:
+        return inference, degrees, fe_rank, xpx_condition
     return inference, degrees, fe_rank
 
 
@@ -314,6 +321,8 @@ def run_return_regression(
     outcome,
     window_label,
     specification,
+    *,
+    include_diagnostics=False,
 ):
     """
     运行表2中的一个收益回归。
@@ -436,8 +445,8 @@ def run_return_regression(
         )
 
     beta = float(result.params[cue_col])
-    inference, degrees, fe_rank = figure2_consistent_inference(
-        model, result, clusters, reg, fe_code_cols,
+    inference, degrees, fe_rank, xpx_condition = figure2_consistent_inference(
+        model, result, clusters, reg, fe_code_cols, include_diagnostics=True,
     )
     standard_error = float(inference.loc[cue_col, "标准误"])
     t_value = float(inference.loc[cue_col, "t值"])
@@ -474,6 +483,11 @@ def run_return_regression(
         "固定效应实际秩": fe_rank,
         "R方": float(result.rsquared),
     }
+
+    # 仅图2请求诊断时添加字段，表2原有导出列保持不变。
+    if include_diagnostics:
+        regression_row["解释变量矩阵条件数"] = xpx_condition
+        regression_row["系数求解方法"] = "吸收最小二乘（复用表2估计器）"
 
     coefficient_rows = build_table2_coefficient_rows(
         result=result,
@@ -539,9 +553,11 @@ def run_table2_sample(
 
 
 def load_selected_main_panel() -> pd.DataFrame:
-    """从共用季度入口组装当前主样本，不重新计算或覆盖原最终面板。"""
+    """按两日、十一日收益共同完整资格组装主样本，不改写原最终面板。"""
     pieces = []
-    for block, returns, controls, cue, common in iter_main_blocks():
+    for block, returns, controls, cue, common in iter_main_blocks(
+        required_horizons=(1, 10)
+    ):
         positions = np.flatnonzero(common)
         frame = pd.DataFrame(controls[positions], columns=CONTROL_COLUMNS)
         frame["StkcdRecall"] = block["firm"][positions]

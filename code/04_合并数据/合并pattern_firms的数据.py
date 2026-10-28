@@ -9,6 +9,19 @@ import datetime
 # 根据脚本位置定位项目根目录，整个项目移动后无需修改路径。
 ROOT = Path(__file__).resolve().parents[2]
 
+# 提示公司口径开关：修改下面这一行后，自行运行本脚本。
+# "size90"（市值90分位）：公告前第3个交易日总市值严格高于所选月份的90分位断点。
+# "hs300"（历史沪深300）：按当前事件交易日的历史成分资格判断，不叠加市值门槛。
+# "both"（同时输出）：依次生成上述两套结果，每套完成后释放内存。
+CUE_DEFINITION = "both"
+
+# 沪深300模式复用已有历史成分区间文件；也可在 main（主函数）中传入其他路径。
+# 沪深300样本限定在成分文件覆盖期内，当前文件为2005年4月8日至2025年12月31日。
+# 周边日度数据仍用于构造公告控制窗口；市值模式沿用原日期口径。
+# 沪深300模式的输出文件另加“_沪深300”后缀，市值模式沿用原文件名。
+# 内部 S90p（原90分位后缀）工作列用于计算所选主口径，沪深300输出时统一改名。
+# 其他规模组仍按真实市值划分，可能与沪深300主组重叠。
+
 
 #pd.set_option('display.max_columns', None)
 #pd.set_option('display.width', None)
@@ -107,7 +120,7 @@ def calculate_sue_cue_averages(collapsed, denominator_mode):
 ## 路径设置
 # =============================================================================
 
-def build_pattern_paths(root):
+def build_pattern_paths(root, cue_definition="size90", hs300_membership_path=None):
     """根据项目根目录，构造模式公司脚本所需的文件路径。"""
     root = Path(root)
 
@@ -121,6 +134,8 @@ def build_pattern_paths(root):
             "中间结果/01_清洗后样本/DGTW构建用个股日度面板.csv",
         "marketcap_group_path":
             "中间结果/02_变量构造结果/8月度市值分组/月度市值分组.csv",
+        "hs300_membership_path":
+            "work/图2沪深300_剔除小市值_临时/沪深300_历史成分区间.csv",
         "industry_path":
             "中间结果/02_变量构造结果/同行业识别/个股行业代码完整面板_RESSET补缺.csv",
         "sue_path":
@@ -149,10 +164,21 @@ def build_pattern_paths(root):
             "中间结果/04_合并数据/Pattern样本_最终回归面板.csv",
     }
 
-    return {
+    paths = {
         name: root / relative_path
         for name, relative_path in relative_paths.items()
     }
+
+    if hs300_membership_path is not None:
+        membership_path = Path(hs300_membership_path)
+        paths["hs300_membership_path"] = root / membership_path
+
+    if cue_definition == "hs300":
+        for name in ["sample_intermediate_out_path", "cue_events_out_path", "output_path"]:
+            path = paths[name]
+            paths[name] = path.with_name(f"{path.stem}_沪深300{path.suffix}")
+
+    return paths
 
 
 # =============================================================================
@@ -168,6 +194,7 @@ def build_pattern_config(
     marketcap_breakpoint_mode,
     event_date_mode,
     top_mover_mode="any",
+    cue_definition="size90",
 ):
     """集中构造并校验模式公司脚本的运行参数。"""
 
@@ -179,9 +206,14 @@ def build_pattern_config(
         "MARKETCAP_BREAKPOINT_MODE": marketcap_breakpoint_mode,
         "EVENT_DATE_MODE": event_date_mode,
         "TOP_MOVER_MODE": top_mover_mode,
+        "CUE_DEFINITION": cue_definition,
     }
 
     choice_rules = {
+        "CUE_DEFINITION": (
+            "提示公司口径",
+            ("size90", "hs300"),
+        ),
         "SUE_DENOMINATOR_MODE": (
             "盈余惊喜分母口径",
             ("nonmissing_sue", "all_cues"),
@@ -311,6 +343,80 @@ def load_pattern_matrix_with_marketcap(matrix_path, daily_panel_path):
 
     return mm
 
+
+def merge_hs300_membership(mm, membership_path):
+    """匹配历史沪深300资格，返回矩阵及可识别成员资格的起止日期。"""
+    membership_path = Path(membership_path)
+    if not membership_path.is_file():
+        raise FileNotFoundError(
+            f"找不到沪深300历史成分区间文件：{membership_path}。"
+            "请在主函数的 hs300_membership_path（历史成分文件路径）参数中指定现有文件。"
+        )
+
+    members = pd.read_csv(membership_path, dtype={"Stkcd": "string"})
+    required = {"Stkcd", "start_date", "end_date", "CoverageEndDate"}
+    missing = required - set(members.columns)
+    if missing:
+        raise ValueError(f"沪深300历史成分文件缺少字段：{missing}")
+    if members.empty:
+        raise ValueError("沪深300历史成分文件为空，不能判断成员资格。")
+
+    members["Stkcd"] = members["Stkcd"].apply(normalize_stock_code)
+    members["start_date"] = pd.to_datetime(members["start_date"], errors="raise")
+    members["end_date"] = pd.to_datetime(members["end_date"], errors="raise")
+    if members["Stkcd"].eq("").any() or members["start_date"].isna().any():
+        raise ValueError("沪深300历史成分文件存在缺失证券代码或区间起始日。")
+    if "Indexcd" in members.columns:
+        index_codes = members["Indexcd"].apply(normalize_stock_code)
+        if not index_codes.eq("000300").all():
+            raise ValueError("历史成分文件包含非沪深300指数的记录。")
+
+    # 结束日缺失表示截至文件覆盖末日仍在成分股中。
+    coverage = pd.to_datetime(members["CoverageEndDate"], errors="raise")
+    if coverage.isna().any() or coverage.nunique() != 1:
+        raise ValueError("历史成分文件的覆盖截止日缺失或不一致。")
+    coverage_start = members["start_date"].min()
+    coverage_end = coverage.iloc[0]
+    if coverage_end < coverage_start:
+        raise ValueError("历史成分文件的覆盖截止日早于起始日。")
+    open_end = coverage_end + pd.Timedelta(days=1)
+    members["end_date"] = members["end_date"].fillna(open_end)
+    members = members.sort_values(["Stkcd", "start_date"])
+    previous_end = members.groupby("Stkcd")["end_date"].shift()
+    if (
+        members["end_date"].le(members["start_date"]).any()
+        or members["start_date"].lt(previous_end).any()
+    ):
+        raise ValueError("沪深300历史成分区间长度无效，或同一公司的区间相互重叠。")
+
+    if mm["event_Trddt"].isna().any():
+        raise ValueError("记忆矩阵存在缺失事件交易日，不能判断沪深300资格。")
+    in_coverage = mm["event_Trddt"].between(coverage_start, coverage_end)
+    print("沪深300事件构造排除覆盖期外的公司对记录数：", (~in_coverage).sum())
+    mm = mm.loc[in_coverage].copy()
+    events = mm[["Stkcd", "event_Trddt"]].drop_duplicates().copy()
+    matches = pd.merge_asof(
+        events.sort_values("event_Trddt"),
+        members[["Stkcd", "start_date", "end_date"]].sort_values("start_date"),
+        by="Stkcd",
+        left_on="event_Trddt",
+        right_on="start_date",
+        direction="backward",
+        allow_exact_matches=True,
+    )
+    matches["isHS300"] = (
+        matches["start_date"].notna()
+        & matches["event_Trddt"].lt(matches["end_date"])
+    ).astype("int8")
+    mm = mm.merge(
+        matches[["Stkcd", "event_Trddt", "isHS300"]],
+        on=["Stkcd", "event_Trddt"],
+        how="left",
+        validate="m:1",
+    )
+    print("历史沪深300成员资格成立的公司对记录数：", mm["isHS300"].sum())
+    return mm, coverage_start, coverage_end
+
 # 合并市值排名数据
 
 # 本文在复现过程中发现，原始代码在识别“大市值 cue 公司”时可能存在前视信息使用问题。
@@ -329,8 +435,9 @@ def merge_monthly_marketcap_breakpoints(
     mm,
     breakpoint_path,
     breakpoint_mode,
+    drop_missing=True,
 ):
-    """按事件月份合并市值断点，保留市值及必要断点完整的公司对记录。"""
+    """合并市值断点；市值模式删除必要市值缺失，沪深300模式保留。"""
 
     marketcap_group = pd.read_csv(
         breakpoint_path,
@@ -395,7 +502,10 @@ def merge_monthly_marketcap_breakpoints(
     print(mm[required_columns].isna().sum())
 
     rows_before_filter = len(mm)
-    mm = mm.dropna(subset=required_columns).copy()
+    if drop_missing:
+        mm = mm.dropna(subset=required_columns).copy()
+    else:
+        print("沪深300模式：市值或断点缺失不影响主提示资格，保留这些公司对。")
 
     print(
         "因总市值或必要断点缺失删除的公司对记录数：",
@@ -905,16 +1015,25 @@ def deduplicate_pattern_event_pairs(mm):
 
 
 #===============================================================================
-# 构造 cue dummy: 大公司cue、强记忆cue
+# 构造所选口径的主提示变量，以及真实市值的辅助规模组
 #===============================================================================
 
-def add_size_groups_and_basic_cues(mm):
-    """划分提示公司的规模组，并构造季度关系与规模组的交互变量。"""
+def add_size_groups_and_basic_cues(mm, cue_definition="size90"):
+    """保留真实规模分组，并按开关构造主提示资格与季度关系的交互变量。"""
 
     # 使用已经并入的提示公司总市值和月度分位点。
     mm["size90plus"] = (
         mm["mktcap_tm3"] > mm["marketCap_90th_percentile"]
     ).astype(int)
+
+    if cue_definition == "size90":
+        mm["mainCueEligible"] = mm["size90plus"]
+    elif cue_definition == "hs300":
+        if "isHS300" not in mm.columns:
+            raise ValueError("尚未匹配历史沪深300成分资格，不能构造沪深300提示。")
+        mm["mainCueEligible"] = mm["isHS300"]
+    else:
+        raise ValueError("提示公司口径只能是 size90（市值90分位）或 hs300（沪深300）。")
 
     mm["size50_90"] = (
         (mm["mktcap_tm3"] > mm["marketCap_50th_percentile"])
@@ -930,6 +1049,9 @@ def add_size_groups_and_basic_cues(mm):
         mm["mktcap_tm3"] < mm["marketCap_10th_percentile"]
     ).astype(int)
 
+    # 主组内部沿用旧计算列名，实际资格由上面的开关决定。
+    # 沪深300模式最终输出时，所有主组列统一改为沪深300名称。
+    # 辅助规模组始终按真实市值划分，与沪深300主组可能重叠。
     # 当前构造和后续汇总均使用上一季度关系。
     max_lag = 1
 
@@ -941,7 +1063,7 @@ def add_size_groups_and_basic_cues(mm):
             continue
 
         mm[f"quarterLag{i}size90plus"] = (
-            mm[lag_col] * mm["size90plus"]
+            mm[lag_col] * mm["mainCueEligible"]
         ).astype("int8")
 
         mm[f"quarterLag{i}size50_90"] = (
@@ -964,14 +1086,15 @@ def add_size_groups_and_basic_cues(mm):
 # ============================================================
 
 def add_strong_memory_cues(mm, top_mover_mode="any"):
-    """将已有的上一季度历史机制标记与当前提示公司规模组相乘。"""
+    """将历史机制标记与所选主提示资格、真实中高市值资格分别相乘。"""
 
     max_lag = 1
 
-    size_groups = [
-        "size90plus",
-        "size50_90",
-    ]
+    # 左侧为内部工作列后缀，右侧为实际使用的资格标记。
+    size_groups = {
+        "size90plus": "mainCueEligible",
+        "size50_90": "size50_90",
+    }
 
     # 一、历史注意力和成交量标记与规模组交互。
     attention_volume_suffixes = [
@@ -981,14 +1104,14 @@ def add_strong_memory_cues(mm, top_mover_mode="any"):
     ]
 
     for i in range(1, max_lag + 1):
-        for size in size_groups:
+        for size, eligibility_col in size_groups.items():
             for suffix in attention_volume_suffixes:
                 src = f"lag{i}{suffix}"
                 dst = f"lag{i}{suffix}{size}"
 
-                if src in mm.columns and size in mm.columns:
+                if src in mm.columns and eligibility_col in mm.columns:
                     mm[dst] = (
-                        mm[src] * mm[size]
+                        mm[src] * mm[eligibility_col]
                     ).astype("int8")
 
     # 二、历史盈余惊喜标记与规模组交互。
@@ -1012,14 +1135,14 @@ def add_strong_memory_cues(mm, top_mover_mode="any"):
     ]
 
     for i in range(1, max_lag + 1):
-        for size in size_groups:
+        for size, eligibility_col in size_groups.items():
             for suffix in sue_suffixes:
                 src = f"lag{i}{suffix}"
                 dst = f"lag{i}{suffix}{size}"
 
-                if src in mm.columns and size in mm.columns:
+                if src in mm.columns and eligibility_col in mm.columns:
                     mm[dst] = (
-                        mm[src] * mm[size]
+                        mm[src] * mm[eligibility_col]
                     ).astype("int8")
 
     # 三、按所选历史价格异动口径，与规模组交互。
@@ -1050,13 +1173,13 @@ def add_strong_memory_cues(mm, top_mover_mode="any"):
                 "请检查上游记忆矩阵。"
             )
 
-        for size in size_groups:
+        for size, eligibility_col in size_groups.items():
             # 输出列名保持统一，具体含义由所选口径决定。
             dst = f"lag{i}topMover{size}"
 
-            if size in mm.columns:
+            if eligibility_col in mm.columns:
                 mm[dst] = (
-                    mm[src] * mm[size]
+                    mm[src] * mm[eligibility_col]
                 ).astype("int8")
 
     print(
@@ -1068,7 +1191,7 @@ def add_strong_memory_cues(mm, top_mover_mode="any"):
 
 
 # ============================================================
-# 准备大市值提示事件的盈余惊喜分子及有效分母输入
+# 准备所选主提示事件的盈余惊喜分子及有效分母输入
 # ============================================================
 
 def add_sue_cue_inputs(mm):
@@ -1084,7 +1207,7 @@ def add_sue_cue_inputs(mm):
             mm[f"{sue_col}Lag{i}S90p"] = (
                 mm[sue_col]
                 * mm[lag_col]
-                * mm["size90plus"]
+                * mm["mainCueEligible"]
             )
 
             # 市值加权平均所需的逐行分子。
@@ -1092,7 +1215,7 @@ def add_sue_cue_inputs(mm):
                 mm[sue_col]
                 * mm[lag_col]
                 * mm["mktcap_tm3"]
-                * mm["size90plus"]
+                * mm["mainCueEligible"]
             )
 
     # 始终准备各自的非缺失提示数量和有效市值。
@@ -1120,7 +1243,7 @@ def add_sue_cue_inputs(mm):
 # ============================================================
 
 def add_marketcap_and_interference_inputs(mm):
-    """准备两个规模组的市值及历史共同公告数量汇总输入。"""
+    """准备所选主组和中高市值组的市值及历史共同公告数量汇总输入。"""
 
     max_lag = 1
 
@@ -1142,7 +1265,7 @@ def add_marketcap_and_interference_inputs(mm):
         nr_col = f"nrFirmsAnnLag{i}Alt"
 
         mm[f"nrFirmsAnnLag{i}S90p"] = (
-            mm[nr_col] * mm["size90plus"]
+            mm[nr_col] * mm["mainCueEligible"]
         )
 
         mm[f"nrFirmsAnnLag{i}S5090"] = (
@@ -1156,7 +1279,7 @@ def add_marketcap_and_interference_inputs(mm):
         mm[f"nrFirmsAnnLag{i}XmarketCapS90p"] = (
             mm[nr_col]
             * mm["mktcap_tm3"]
-            * mm["size90plus"]
+            * mm["mainCueEligible"]
         )
 
         mm[f"nrFirmsAnnLag{i}XmarketCapS5090"] = (
@@ -1168,7 +1291,7 @@ def add_marketcap_and_interference_inputs(mm):
     return mm
 
 # ============================================================
-# 聚合前排序，并提取基准大市值提示配对表
+# 聚合前排序，并提取所选口径的基准提示配对表
 # ============================================================
 
 def prepare_pattern_cue_pairs(mm):
@@ -1190,7 +1313,7 @@ def prepare_pattern_cue_pairs(mm):
         .reset_index(drop=True)
     )
 
-    # 只提取上一季度关系成立的大市值提示配对。
+    # 只提取上一季度关系成立、且满足所选主提示资格的配对。
     cue_pairs = (
         mm.loc[
             mm["quarterLag1size90plus"].eq(1),
@@ -1219,7 +1342,7 @@ def build_pattern_cue_agg_specs(data_columns):
     """根据输入字段，构造求和与最大值聚合规则。"""
 
     agg_dict = {
-        # 四个规模组的提示数量。
+        # 所选主组和三个真实市值辅助组的提示数量。
         "nrCuesLag1S90p": ("quarterLag1size90plus", "sum"),
         "nrCuesLag1S5090": ("quarterLag1size50_90", "sum"),
         "nrCuesLag1S1050": ("quarterLag1size10_50", "sum"),
@@ -1269,7 +1392,7 @@ def build_pattern_cue_agg_specs(data_columns):
     # 加入三种盈余惊喜各自的有效提示数量和有效市值。
     agg_dict.update(sue_denominator_agg_specs())
 
-    # 大市值提示的实际报告来源及来源专属盈余惊喜，供后续核查。
+    # 所选主提示的实际报告来源及来源专属盈余惊喜，供后续核查。
     agg_dict["cueReportSourcesLag1S90p"] = (
         "lag1CueReportSourcesS90p", union_pipe_values
     )
@@ -1490,8 +1613,28 @@ def collapse_pattern_cues(mm, denominator_mode):
 # 精简提示事件表并保存，供后续日度面板合并
 # ============================================================
 
-def save_pattern_cue_events(collapsed, output_path):
-    """删除聚合中间列，保存并返回精简提示事件表。"""
+def pattern_cue_output_name(name, cue_definition):
+    """沪深300输出使用对应名称；市值模式保留已有列名。"""
+    if cue_definition == "hs300":
+        return name.replace("size90plus", "HS300").replace("S90p", "HS300")
+    return name
+
+
+def format_pattern_cue_output(data, cue_definition):
+    """在输出表中注明所选口径，并统一主提示及全部机制变量的名称。"""
+    rename_columns = {
+        col: pattern_cue_output_name(col, cue_definition)
+        for col in data.columns
+    }
+    if len(set(rename_columns.values())) != len(rename_columns):
+        raise ValueError("提示口径重命名后出现重复列名，不能保存。")
+    output = data.rename(columns=rename_columns, copy=False)
+    output["cueDefinition"] = cue_definition
+    return output
+
+
+def save_pattern_cue_events(collapsed, output_path, cue_definition="size90"):
+    """按所选口径保存事件表，返回沿用内部工作列名的表供后续计算。"""
 
     output_path = Path(output_path)
 
@@ -1515,7 +1658,8 @@ def save_pattern_cue_events(collapsed, output_path):
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    cue_events_for_panel.to_csv(
+    output_table = format_pattern_cue_output(cue_events_for_panel, cue_definition)
+    output_table.to_csv(
         output_path,
         index=False,
         encoding="utf-8-sig",
@@ -1527,7 +1671,7 @@ def save_pattern_cue_events(collapsed, output_path):
         output_path,
     )
     print("保存行数：", len(cue_events_for_panel))
-    print("保存列数：", cue_events_for_panel.shape[1])
+    print("保存列数：", output_table.shape[1])
     print("已删除的中间变量：")
     print(panel_drop_cols)
 
@@ -2152,6 +2296,20 @@ def merge_pattern_cue_events(
             cue_panel["StkcdRecall"]
             .apply(normalize_stock_code)
         )
+
+        # 从已保存的沪深300事件表读取时，恢复内部计算列名。
+        # 以季度关系或历史机制开头的列使用规模后缀，其余汇总列使用主组后缀。
+        if "cueDefinition" in cue_panel.columns:
+            definitions = cue_panel["cueDefinition"].dropna().unique()
+            if len(definitions) != 1 or definitions[0] not in {"size90", "hs300"}:
+                raise ValueError("提示事件表没有唯一、有效的提示口径标记。")
+            if definitions[0] == "hs300":
+                rename_columns = {}
+                for col in cue_panel.columns:
+                    if "HS300" in col:
+                        suffix = "size90plus" if col.startswith(("quarterLag", "lag")) else "S90p"
+                        rename_columns[col] = col.replace("HS300", suffix)
+                cue_panel = cue_panel.rename(columns=rename_columns)
     else:
         cue_panel = cue_events.copy()
 
@@ -3037,7 +3195,7 @@ def clean_pattern_final_columns(daily_panel):
 #===============================================================================
 # 变量中文标签
 #===============================================================================
-def build_pattern_variable_labels():
+def build_pattern_variable_labels(cue_definition="size90"):
     """构建变量名与中文说明的对应字典。"""
     variable_labels = {
         "StkcdRecall": "被提示公司股票代码",
@@ -3139,6 +3297,19 @@ def build_pattern_variable_labels():
         variable_labels[f"sue{sue_id}CueLag1EWS90p_quintile"] = (
             f"lag1 大市值提示公司等权 SUE{sue_id} 盈余惊喜五分位"
         )
+    if cue_definition == "hs300":
+        variable_labels = {
+            pattern_cue_output_name(name, cue_definition): (
+                label.replace("大市值", "沪深300")
+                if "size90plus" in name or "S90p" in name
+                else label
+            )
+            for name, label in variable_labels.items()
+        }
+    variable_labels["cueDefinition"] = (
+        "提示公司口径：size90（市值严格高于第90分位）或hs300（历史沪深300）；"
+        "该标记适用于整张输出表，包括没有提示的公司日"
+    )
     return variable_labels
 
 def save_pattern_final_sample(daily_panel, output_path):
@@ -3167,12 +3338,48 @@ def main(
     marketcap_breakpoint_mode="prev_month",
     event_date_mode="next_if_nontrading",
     top_mover_mode="any",
+    cue_definition=CUE_DEFINITION,
+    hs300_membership_path=None,
 ):
-    """统一组织模式公司样本的构建流程。"""
+    """按顶部开关输出一种或两种提示样本，不自动切换回归缓存。
 
-    # 根据项目根目录构造输入、输出路径。
+    单口径返回面板及统计结果；双口径仅返回两张最终面板的保存路径，
+    每套完成后释放其大表，避免同时将两套面板保留在内存中。
+    """
+
+    if cue_definition not in {"size90", "hs300", "both"}:
+        raise ValueError(
+            "提示口径只能是 size90（市值90分位）、hs300（历史沪深300）"
+            "或 both（同时输出两种）。"
+        )
+
+    if cue_definition == "both":
+        output_paths = {}
+        for definition, label in [
+            ("size90", "市值90分位"),
+            ("hs300", "历史沪深300"),
+        ]:
+            print(f"开始构建双口径输出中的{label}样本。", flush=True)
+            result = main(
+                root=root,
+                sue_denominator_mode=sue_denominator_mode,
+                drop_analyst_overlap=drop_analyst_overlap,
+                analyst_id_mode=analyst_id_mode,
+                analyst_lookback_days=analyst_lookback_days,
+                marketcap_breakpoint_mode=marketcap_breakpoint_mode,
+                event_date_mode=event_date_mode,
+                top_mover_mode=top_mover_mode,
+                cue_definition=definition,
+                hs300_membership_path=hs300_membership_path,
+            )
+            output_paths[definition] = result["output_path"]
+            del result
+            gc.collect()
+            print(f"{label}样本已保存并释放内存：{output_paths[definition]}", flush=True)
+        return {"cue_definition": "both", "output_paths": output_paths}
+
+    # 根据项目根目录定位输入、输出文件。
     root = Path(root)
-    paths = build_pattern_paths(root)
 
     # 集中构造并校验运行参数。
     config = build_pattern_config(
@@ -3183,7 +3390,17 @@ def main(
         marketcap_breakpoint_mode=marketcap_breakpoint_mode,
         event_date_mode=event_date_mode,
         top_mover_mode=top_mover_mode,
+        cue_definition=cue_definition,
     )
+
+    paths = build_pattern_paths(
+        root,
+        cue_definition=config["CUE_DEFINITION"],
+        hs300_membership_path=hs300_membership_path,
+    )
+    cue_labels = {"size90": "市值严格高于第90分位", "hs300": "历史沪深300"}
+    print("本次主提示公司口径：", cue_labels[config["CUE_DEFINITION"]])
+    print("本次最终面板路径：", paths["output_path"])
 
     # 分析师共同覆盖文件所在目录。
     analyst_overlap_root = (
@@ -3196,11 +3413,22 @@ def main(
         daily_panel_path=paths["TRD_Dalyr_DGTW_path"],
     )
 
+    # 沪深300资格按当前事件交易日判断，保留金融和房地产提示公司。
+    # 从完整记忆矩阵匹配，不先要求提示公司通过市值门槛或具有有效市值。
+    hs300_start_date = None
+    hs300_end_date = None
+    if config["CUE_DEFINITION"] == "hs300":
+        mm, hs300_start_date, hs300_end_date = merge_hs300_membership(
+            mm=mm,
+            membership_path=paths["hs300_membership_path"],
+        )
+
     # 合并月度市值断点。
     mm = merge_monthly_marketcap_breakpoints(
         mm=mm,
         breakpoint_path=paths["marketcap_group_path"],
         breakpoint_mode=config["MARKETCAP_BREAKPOINT_MODE"],
+        drop_missing=config["CUE_DEFINITION"] == "size90",
     )
 
     # 构造筛选键表，排除已识别的同行业公司对。
@@ -3240,6 +3468,7 @@ def main(
     # 第二阶段：构造提示变量，并聚合到被提示公司事件日。
     mm = add_size_groups_and_basic_cues(
         mm=mm,
+        cue_definition=config["CUE_DEFINITION"],
     )
 
     mm = add_strong_memory_cues(
@@ -3270,6 +3499,7 @@ def main(
     cue_events_for_panel = save_pattern_cue_events(
         collapsed=collapsed,
         output_path=paths["cue_events_out_path"],
+        cue_definition=config["CUE_DEFINITION"],
     )
 
     # 释放已完成用途的大中间表。
@@ -3326,6 +3556,16 @@ def main(
         daily_panel=daily_panel,
         adjusted_return_path=paths["adjusted_return_path"],
     )
+
+    # 公告窗口已使用周边日度记录构造完毕，此时再限制沪深300可识别期间。
+    # 覆盖期外成员资格未知，不能将这些公司日的提示指标当作0进入回归。
+    if config["CUE_DEFINITION"] == "hs300":
+        in_coverage = daily_panel["Trddt"].between(hs300_start_date, hs300_end_date)
+        daily_panel = daily_panel.loc[in_coverage].copy()
+        print(
+            f"沪深300样本覆盖期：{hs300_start_date:%Y-%m-%d}至{hs300_end_date:%Y-%m-%d}；"
+            f"保留公司日记录数：{len(daily_panel)}"
+        )
 
         # 第四阶段：构造分组，准备并筛选基准样本。
 
@@ -3425,8 +3665,14 @@ def main(
         daily_panel=daily_panel,
     )
 
+    # 所有内部计算完成后再统一命名，保证沪深300主组不会被误读为市值90分位组。
+    daily_panel = format_pattern_cue_output(
+        daily_panel,
+        cue_definition=config["CUE_DEFINITION"],
+    )
+
     # 构造中文说明字典。
-    variable_labels = build_pattern_variable_labels()
+    variable_labels = build_pattern_variable_labels(config["CUE_DEFINITION"])
 
     # 保存最终回归面板。
     save_pattern_final_sample(
@@ -3440,6 +3686,8 @@ def main(
         "nr_firms_cued": nr_firms_cued,
         "nr_firms_cued_summary": nr_firms_cued_summary,
         "variable_labels": variable_labels,
+        "cue_definition": config["CUE_DEFINITION"],
+        "output_path": paths["output_path"],
     }
 
 
