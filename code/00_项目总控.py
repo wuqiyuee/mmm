@@ -117,7 +117,7 @@ def build_tasks() -> dict[str, Task]:
             stage="00 原始数据合并",
             script="code/00_合并原始数据/合并日度（升级测试）数据.py",
             inputs=(
-                "input/CSMAR/个股日度收益率（升级测试）1995-01-01至于1999-12-31",
+                "input/CSMAR/个股日度收益率（升级测试）1995-01-01至2026",
             ),
             outputs=(
                 "中间结果/00_合并原始数据/CSMAR_日个股回报率(升级测试)_1995_2026.csv",

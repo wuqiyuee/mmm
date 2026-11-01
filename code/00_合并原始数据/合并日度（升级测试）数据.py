@@ -6,7 +6,7 @@ import gc
 ROOT = Path(__file__).resolve().parents[2]
 
 # 基础路径：直接指向“个股日度收益率（升级测试）”
-base_dir = ROOT/'input/CSMAR/个股日度收益率（升级测试）1995-01-01至于1999-12-31'
+base_dir = ROOT/'input/CSMAR/个股日度收益率（升级测试）1995-01-01至2026'
 
 # 是否导出合并结果
 save_output = True
