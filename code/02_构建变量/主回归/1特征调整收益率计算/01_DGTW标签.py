@@ -12,7 +12,7 @@ import logging
 logging.getLogger('matplotlib.font_manager').disabled = True
 
 # =============================================================================
-# 基础设置(路径设置，方便查看读取了哪些文件)
+# 基础设置
 # =============================================================================
 
 pd.set_option('display.max_columns', None)
@@ -92,14 +92,14 @@ TRD_Dalyr['logret_rolling_20']=(
     .rolling(window=20,min_periods=20)
     .sum()
     .reset_index(level=0,drop=True)
-) #要求过去20天收益不是缺失值（不是金融、新股、ST）
+) # 要求过去20天收益不是缺失值（不是金融、新股、ST）
 
 TRD_Dalyr["return_tm252_tm20"] = (
     np.expm1(
         TRD_Dalyr["logret_rolling_252"] -
         TRD_Dalyr["logret_rolling_20"]
     ) * 100
-)#要求过去252天收益不是缺失值（不是金融、新股、ST）
+)# 要求过去252天收益不是缺失值（不是金融、新股、ST）
 
 TRD_Dalyr["return_tm252_tm20"] = (
     np.expm1(

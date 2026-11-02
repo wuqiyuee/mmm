@@ -33,15 +33,15 @@
 #   6. 停牌 / 无日度交易记录的 volS 和 vol 设为 0；
 #      正常交易但 OIB 或 Dnshrtrd 缺失仍保留 NaN。
 # 7. OIB 与异常成交量采用不同的计算面板：
-#    四个单日 OIB 只保留基础清洗后的真实交易日,
-#    OIB 未来均值在窗口变量目标日资格索引上严格按照 td 计算，
+#    四个单日 OIB 保留基础清洗后的合格日期（含合格填充记录），
+#    OIB 未来均值使用同一基础样本索引，严格按照 td 计算，
 #    窗口内任一交易日或 OIB 缺失，整个窗口结果均为缺失；
 #
 # 原始买卖数据
 #     ↓
 # 计算四个单日 OIB：OIBvol、OIBnum、OIBamount、OIBorder
 #     ├─ 合并基础清洗样本索引 → 单日 OIB
-#     └─ 合并窗口资格索引 → 严格计算 OIB_avg
+#     └─ 合并同一基础样本索引 → 严格计算 OIB_avg
 #                               ↓
 #                     再按基础样本筛选起始日 t
 
@@ -76,11 +76,6 @@ ROOT = Path(__file__).resolve().parents[4]
 HF_BSImbalance_file = ROOT / '中间结果/00_合并原始数据/CSMAR_个股买卖不平衡指标表_日_合并结果.csv'
 TRD_Dalyr_file = ROOT / '中间结果/00_合并原始数据/CSMAR_日个股回报率(升级测试)_1995_2026.csv'
 panel_file = ROOT / '中间结果/01_清洗后样本/完整个股交易日面板索引_td.csv'
-window_target_index_file = (
-    ROOT / '中间结果/01_清洗后样本/'
-    '窗口变量目标日资格索引_基础清洗含停牌填充_td.csv'
-)
-
 base_sample_index_file = (
     ROOT / '中间结果/01_清洗后样本/'
     '基础清洗后个股日度样本索引_td.csv'
@@ -1418,11 +1413,11 @@ def main():
     gc.collect()
 
     # =====================================================================
-    # 3. 在窗口变量目标日资格索引上严格计算 OIB 未来均值
+    # 3. 在统一基础样本索引上严格计算 OIB 未来均值
     # =====================================================================
 
     window_index = load_stock_day_panel(
-        window_target_index_file
+        base_sample_index_file
     )
 
     check_unique_key(

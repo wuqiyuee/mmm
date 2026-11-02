@@ -3,7 +3,7 @@
 
 本脚本完整实现以下三项功能：
 
-1. 生成 A 股市场交易日历和基础清洗后的股票—交易日样本索引；
+1. 生成 A 股市场交易日历和基础清洗后股票—交易日样本索引；
 2. 使用 CSMAR 行业历史匹配行业代码，并使用 RESSET 行业历史补充缺失；
 3. 构造完整股票—交易日面板，以及用于 DGTW 标签构造的收益窗口和滞后市值。
 
@@ -17,16 +17,17 @@
 → 计算成交天数（交易天数）：trade_days_1m（近一个月成交天数）、trade_days_1y（近一年成交天数）
 → 匹配 CSMAR 行业
 → 使用 RESSET 补缺
-→ 重新识别金融行业
+→ 重新识别并剔除明确金融行业观测
 → 上市满一年筛选
 → ST/PT 状态筛选
-→ 输出基础样本池、窗口变量目标日资格索引和 DGTW 构建面板。
+→ 输出统一基础样本索引
+→ 恢复完整交易日索引，计算收益窗口和滞后三日市值
+→ 输出保留填充标志的 DGTW 构建面板。
 
 主要输出：
 
 - 中间结果/01_清洗后样本/市场交易日历_td.csv
 - 中间结果/01_清洗后样本/基础清洗后个股日度样本索引_td.csv
-- 中间结果/01_清洗后样本/窗口变量目标日资格索引_基础清洗含停牌填充_td.csv
 - 中间结果/01_清洗后样本/完整个股交易日面板索引_td.csv
 - 中间结果/01_清洗后样本/DGTW构建用个股日度面板.csv
 - 中间结果/02_变量构造结果/同行业识别/个股行业代码完整面板.csv
@@ -85,12 +86,6 @@ RAW_CALENDAR_PATH = (
 # 输出文件
 CLEAN_OUTPUT_DIR = ROOT / "中间结果/01_清洗后样本"
 INDUSTRY_OUTPUT_DIR = ROOT / "中间结果/02_变量构造结果/同行业识别"
-WINDOW_VARIABLE_TARGET_INDEX_OUTPUT_PATH = (
-    CLEAN_OUTPUT_DIR
-    / "窗口变量目标日资格索引_基础清洗含停牌填充_td.csv"
-)
-
-
 CALENDAR_OUTPUT_PATH = CLEAN_OUTPUT_DIR / "市场交易日历_td.csv"
 BASE_SAMPLE_OUTPUT_PATH = CLEAN_OUTPUT_DIR / "基础清洗后个股日度样本索引_td.csv"
 FULL_PANEL_OUTPUT_PATH = CLEAN_OUTPUT_DIR / "完整个股交易日面板索引_td.csv"
@@ -112,9 +107,6 @@ FINAL_OUTPUT_PATHS = {
     "csmar_industry": CSMAR_INDUSTRY_PANEL_OUTPUT_PATH,
     "resset_filled": RESSET_FILLED_PANEL_OUTPUT_PATH,
     "resset_detail": RESSET_FILL_DETAIL_OUTPUT_PATH,
-    "window_variable_target_index": (
-        WINDOW_VARIABLE_TARGET_INDEX_OUTPUT_PATH
-    ),
 }
 OUTPUT_COMMIT_MANIFEST_PATH = CLEAN_OUTPUT_DIR / ".unified_cleaning_commit.json"
 OUTPUT_PROCESS_LOCK_PATH = CLEAN_OUTPUT_DIR / ".unified_cleaning.lock"
@@ -1353,53 +1345,13 @@ def drop_st_pt_trading_status(
 
 
 # =============================================================================
-# 八、基础样本池分支
+# 八、统一基础样本索引（兼作窗口变量目标日资格索引）
 # =============================================================================
-
-
-def keep_non_filled_observations(panel: pd.DataFrame) -> pd.DataFrame:
-    """基础样本池分支仅保留 Filling 等于 0 的真实交易观测。"""
-
-    non_filled_mask = panel["Filling"].eq(0)
-    report_mask = get_report_period_mask(panel)
-    before = int(report_mask.sum())
-    removed = int((report_mask & ~non_filled_mask).sum())
-
-    out = panel.loc[non_filled_mask].copy()
-    print(f"停牌或暂停上市清洗报告期：{report_period_label()}")
-    print(f"删除 Filling=1 的停牌或暂停上市观测：{removed:,} 条。")
-    print(f"报告期样本数从 {before:,} 下降为 {before - removed:,}。")
-    return out
 
 
 def build_base_sample_index(eligible_panel: pd.DataFrame) -> pd.DataFrame:
-    """生成只包含 Stkcd、Trddt 和 td 的基础样本索引。"""
-
-    observed_panel = keep_non_filled_observations(eligible_panel)
-    output = observed_panel[["Stkcd", "Trddt", "td"]].dropna(subset=["td"]).copy()
-    output["td"] = output["td"].astype(np.int64)
-    output = output.sort_values(["Stkcd", "td"]).reset_index(drop=True)
-
-    require_unique_key(output, ("Stkcd", "td"), "基础清洗后样本索引")
-    return output
-
-
-def save_base_sample_index(panel: pd.DataFrame, path: Path) -> None:
-    """保存基础清洗后的股票—交易日样本索引。"""
-
-    panel.to_csv(path, index=False, encoding="utf-8-sig")
-    print(f"基础清洗后样本索引已输出：{path}，共 {len(panel):,} 行。")
-
-
-# =============================================================================
-# 九、窗口变量目标日资格索引分支
-# =============================================================================
-
-def build_window_variable_target_index(
-    eligible_panel: pd.DataFrame,
-) -> pd.DataFrame:
     """
-    生成窗口变量目标日资格索引。
+    生成统一基础样本索引，同时用于窗口变量目标日资格判断。
 
     eligible_panel 已完成：
     1. A股市场筛选；
@@ -1407,23 +1359,23 @@ def build_window_variable_target_index(
     3. 上市满一年筛选；
     4. ST/PT等异常交易状态筛选。
 
-    本分支不执行 Filling=0 筛选，因此保留 Filling=0/1。
+    保留 Filling（填充标志）为 0/1 的合格观测，输出时一并保留该标志。
     """
 
     require_columns(
         eligible_panel,
         ("Stkcd", "Trddt", "td", "Filling"),
-        "窗口变量目标日资格面板",
+        "基础清洗后资格面板",
     )
 
     invalid_filling = ~eligible_panel["Filling"].isin((0, 1))
     if invalid_filling.any():
         raise ValueError(
-            "窗口变量目标日资格面板存在 Filling 不属于 0/1 的观测。"
+            "基础清洗后资格面板存在 Filling（填充标志）不属于 0/1 的观测。"
         )
 
     output = eligible_panel[
-        ["Stkcd", "Trddt", "td"]
+        ["Stkcd", "Trddt", "td", "Filling"]
     ].dropna(
         subset=["Stkcd", "Trddt", "td"]
     ).copy()
@@ -1436,17 +1388,14 @@ def build_window_variable_target_index(
     require_unique_key(
         output,
         ("Stkcd", "td"),
-        "窗口变量目标日资格索引",
+        "基础清洗后样本索引",
     )
 
     return output
 
 
-def save_window_variable_target_index(
-    panel: pd.DataFrame,
-    path: Path,
-) -> None:
-    """保存窗口变量目标日资格索引。"""
+def save_base_sample_index(panel: pd.DataFrame, path: Path) -> None:
+    """保存含填充标志的统一基础清洗后股票—交易日样本索引。"""
 
     panel.to_csv(
         path,
@@ -1455,13 +1404,13 @@ def save_window_variable_target_index(
     )
 
     print(
-        "窗口变量目标日资格索引已输出："
+        "基础清洗后样本索引已输出（含合格填充记录及填充标志）："
         f"{path}，共 {len(panel):,} 行。"
     )
 
 
 # =============================================================================
-# 十、DGTW 标签面板分支
+# 九、DGTW 标签面板分支
 # =============================================================================
 def restore_cleaned_to_full_panel(
     full_panel: pd.DataFrame,
@@ -1567,7 +1516,6 @@ def finalize_dgtw_output_columns(
 
     temporary_columns = [
         "Trdsta",
-        "Filling",
         "has_volume",
         "Listdt",
         "std_id",
@@ -1712,7 +1660,7 @@ def build_and_save_dgtw_panel_in_batches(
 
 
 # =============================================================================
-# 十一、统一入口
+# 十、统一入口
 # =============================================================================
 
 
@@ -1805,33 +1753,12 @@ def run_unified_pipeline(staging_paths: dict[str, Path]) -> None:
     )
     del company
 
-    print_stage(9, "生成并保存基础清洗后的样本索引")
+    print_stage(9, "生成并保存统一基础样本索引，保留合格填充记录及填充标志")
     base_sample_index = build_base_sample_index(eligible_observed_panel)
     report_td_continuity(base_sample_index, "基础清洗后样本索引")
     save_base_sample_index(base_sample_index, staging_paths["base_sample"])
     del base_sample_index
-
-
-    print_stage(10, "生成并保存窗口变量目标日资格索引")
-
-    window_variable_target_index = build_window_variable_target_index(
-        eligible_observed_panel
-    )
-
-    report_td_continuity(
-        window_variable_target_index,
-        "窗口变量目标日资格索引",
-    )
-
-    save_window_variable_target_index(
-        window_variable_target_index,
-        staging_paths["window_variable_target_index"],
-    )
-
-    del window_variable_target_index
-
-
-    print_stage(11, "按股票分批构造并保存 DGTW 宽面板")
+    print_stage(10, "按股票分批构造并保存 DGTW 宽面板")
 
     build_and_save_dgtw_panel_in_batches(
         full_panel=full_panel,
@@ -1842,7 +1769,7 @@ def run_unified_pipeline(staging_paths: dict[str, Path]) -> None:
     del full_panel, eligible_observed_panel
 
 
-    print_stage(12, "统一提交八个正式输出")
+    print_stage(11, "统一提交七个正式输出")
     commit_staging_outputs(staging_paths)
 
     print("\n全部输出步骤已执行完毕。")
