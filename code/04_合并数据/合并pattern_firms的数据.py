@@ -135,7 +135,7 @@ def build_pattern_paths(root, cue_definition="size90", hs300_membership_path=Non
         "marketcap_group_path":
             "中间结果/02_变量构造结果/8月度市值分组/月度市值分组.csv",
         "hs300_membership_path":
-            "work/图2沪深300_剔除小市值_临时/沪深300_历史成分区间.csv",
+            "中间结果/02_变量构造结果/9指数成分股/沪深300/沪深300_历史成分区间.csv",
         "industry_path":
             "中间结果/02_变量构造结果/同行业识别/个股行业代码完整面板_RESSET补缺.csv",
         "sue_path":
