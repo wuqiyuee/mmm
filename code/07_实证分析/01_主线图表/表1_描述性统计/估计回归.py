@@ -206,7 +206,7 @@ def export_table1_image(table, output_path):
     )
     ax.text(
         0.015, 0.085,
-        "订单失衡使用对应回归的有效样本，并剔除公司季度单例观测。",
+        "订单失衡使用对应回归的有效样本，并剔除公司季度单例观测（未删除日度单例）",
         fontsize=10.0, color="#444444", fontproperties=table_font,
     )
 

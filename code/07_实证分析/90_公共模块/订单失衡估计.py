@@ -50,6 +50,115 @@ def significance_stars(p_value):
     return ""
 
 
+def run_oib_regression(data, outcome, rhs_cols):
+    """
+    吸收被提示公司×年度季度固定效应，
+    标准误按被提示公司和日期双向聚类。
+
+    控制变量和线索变量列表由任务显式传入，不依赖其他表先运行后留下的全局变量。
+    """
+    # data:合并订单失衡指标后的模式公司主面板
+    # outcome:本次回归使用的订单不平衡因变量名称
+
+    cue_col = "quarterLag1size90plus"
+
+    needed = (
+        [outcome, "StkcdRecall", "Trddt", "yearQuarter"]
+        + rhs_cols
+    )
+    
+    # 只保留回归所需变量，并删除其中任意变量缺失的观测
+    reg = data[needed].dropna().copy()
+
+    # 构造被提示公司×年度季度固定效应编号
+    fe_codes = (
+        reg.groupby(
+            ["StkcdRecall", "yearQuarter"],
+            observed=True,# observed=True（只处理实际出现的类别组合）：避免为不存在的公司季度组合建立分组；
+            sort=False,
+        )
+        .ngroup() # ngroup()（生成分组编号）：将每个固定效应组转换为整数。
+        .to_numpy(dtype=np.int64)
+    )
+
+    # 删除固定效应单例组：“某家公司在某个年度季度内只有一条有效回归数据”，
+    # 即使不主动删除，固定效应处理后它对系数估计通常也没有作用；
+    # 单例组通常不改变系数，但可能改变样本量、自由度修正和最终报告的聚类标准误
+    fe_counts = np.bincount(fe_codes)
+    keep = fe_counts[fe_codes] > 1
+    singleton_removed = int((~keep).sum())# 记录删除了多少条观测
+
+    reg = reg.loc[keep].copy()
+    fe_codes = fe_codes[keep]# 同步筛选组编号
+
+    # 声明需要吸收的固定效应：被提示公司×年度季度
+    # 只有公司季度固定效应时，这段处理是够的；
+    # 加入日期固定效应后，若要完整剔除单例，就需要反复检查两类分组。 
+    # 因为删除一类分组的单例，可能让另一类分组产生新的单例。
+    absorb = pd.DataFrame(
+        {"firm_yearquarter": pd.Categorical(fe_codes)},
+# pd.Categorical()（转换为分类变量）：告诉模型，0和1代表不同组，数字大小没有经济含义。
+        index=reg.index,
+# index=reg.index（使用回归样本的行索引）：让这张辅助表与原回归样本逐行对应。
+    )
+
+    # 构造双向聚类编号
+    clusters = pd.DataFrame(
+        {
+            "firm": pd.factorize(reg["StkcdRecall"], sort=False)[0],
+            # pd.factorize()（分类编码）给不同取值编上整数编号，它实际上返回两个结果，
+            # 第一个结果：每行对应的公司编号，第二个结果：不同的公司名称
+            # 所以，原代码末尾的 [0] 是取第一个返回结果，也就是整列编号
+            "date": pd.factorize(reg["Trddt"], sort=False)[0],
+        },
+        index=reg.index,
+    )
+
+# 建立回归模型，包括被解释变量、解释变量、吸收变量（公司✖️年度季度固定效应）
+    model = AbsorbingLS(
+        dependent=reg[outcome].astype("float64"),
+        exog=reg[rhs_cols].astype("float64"),
+        absorb=absorb,
+        drop_absorbed=True,
+        # 某解释变量如果完全被固定效应解释，就不再单独估计其系数，此处理同原文
+    )
+
+# 回归系数照常计算，但计算标准误时，要考虑同一公司和同一天的观测可能彼此相关。
+    result = model.fit(
+        cov_type="clustered",
+        clusters=clusters,
+        debiased=True, # debiased=True（有限样本自由度修正）：对聚类标准误作自由度调整。
+    )
+
+# 提取模型汇总和全部解释变量的估计结果
+    regression_info = build_oib_regression_info(
+        result=result,
+        outcome=outcome,
+        cue_col=cue_col,
+        firm_cluster_count=reg["StkcdRecall"].nunique(),
+        date_cluster_count=reg["Trddt"].nunique(),
+        singleton_removed=singleton_removed,
+    )
+
+    coefficient_rows = build_oib_coefficient_rows(
+        result=result,
+        x_cols=rhs_cols,
+        cue_col=cue_col,
+        outcome=outcome,
+    )
+
+    # 对被解释变量（OIB）进行描述性统计
+    outcome_stats = summary_statistics(reg[outcome])
+
+    # 清除不需要的表单，缓解内存压力
+    del result, model, absorb, clusters, reg
+    gc.collect()
+
+    return outcome_stats, regression_info, coefficient_rows
+
+
+
+
 def build_oib_regression_info(
     result,
     outcome,
@@ -134,103 +243,5 @@ def build_oib_coefficient_rows(
         })
 
     return rows
-
-
-def run_oib_regression(data, outcome, rhs_cols):
-    """
-    吸收被提示公司×年度季度固定效应，
-    标准误按被提示公司和日期双向聚类。
-
-    控制变量和线索变量列表由任务显式传入，不依赖其他表先运行后留下的全局变量。
-    """
-    # data:合并订单失衡指标后的模式公司主面板
-    # outcome:本次回归使用的订单不平衡因变量名称
-
-    cue_col = "quarterLag1size90plus"
-
-    needed = (
-        [outcome, "StkcdRecall", "Trddt", "yearQuarter"]
-        + rhs_cols
-    )
-    
-    # 只保留回归所需变量，并删除其中任意变量缺失的观测
-    reg = data[needed].dropna().copy()
-
-    # 构造被提示公司×年度季度固定效应编号
-    fe_codes = (
-        reg.groupby(
-            ["StkcdRecall", "yearQuarter"],
-            observed=True,# observed=True（只处理实际出现的类别组合）：避免为不存在的公司季度组合建立分组；
-            sort=False,
-        )
-        .ngroup() # ngroup()（生成分组编号）：将每个固定效应组转换为整数。
-        .to_numpy(dtype=np.int64)
-    )
-
-    # 删除固定效应单例组：“某家公司在某个年度季度内只有一条有效回归数据”，
-    # 即使不主动删除，固定效应处理后它对系数估计通常也没有作用；
-    # 单例组通常不改变系数，但可能改变样本量、自由度修正和最终报告的聚类标准误
-    fe_counts = np.bincount(fe_codes)
-    keep = fe_counts[fe_codes] > 1
-    singleton_removed = int((~keep).sum())
-
-    reg = reg.loc[keep].copy()
-    fe_codes = fe_codes[keep]
-
-    # 声明需要吸收的固定效应：被提示公司×年度季度
-    absorb = pd.DataFrame(
-        {"firm_yearquarter": pd.Categorical(fe_codes)},
-        index=reg.index,
-    )
-
-    # 构造双向聚类编号
-    clusters = pd.DataFrame(
-        {
-            "firm": pd.factorize(reg["StkcdRecall"], sort=False)[0],
-            "date": pd.factorize(reg["Trddt"], sort=False)[0],
-        },
-        index=reg.index,
-    )
-
-# 建立回归模型，包括被解释变量、解释变量、吸收变量（公司✖️年度季度固定效应）
-    model = AbsorbingLS(
-        dependent=reg[outcome].astype("float64"),
-        exog=reg[rhs_cols].astype("float64"),
-        absorb=absorb,
-        drop_absorbed=True,
-    )
-
-# 回归系数照常计算，但计算标准误时，要考虑同一公司和同一天的观测可能彼此相关。
-    result = model.fit(
-        cov_type="clustered",
-        clusters=clusters,
-        debiased=True, # debiased=True（有限样本自由度修正）：对聚类标准误作自由度调整。
-    )
-
-# 提取模型汇总和全部解释变量的估计结果
-    regression_info = build_oib_regression_info(
-        result=result,
-        outcome=outcome,
-        cue_col=cue_col,
-        firm_cluster_count=reg["StkcdRecall"].nunique(),
-        date_cluster_count=reg["Trddt"].nunique(),
-        singleton_removed=singleton_removed,
-    )
-
-    coefficient_rows = build_oib_coefficient_rows(
-        result=result,
-        x_cols=rhs_cols,
-        cue_col=cue_col,
-        outcome=outcome,
-    )
-
-    # 对被解释变量（OIB）进行描述性统计
-    outcome_stats = summary_statistics(reg[outcome])
-
-    # 清除不需要的表单，缓解内存压力
-    del result, model, absorb, clusters, reg
-    gc.collect()
-
-    return outcome_stats, regression_info, coefficient_rows
 
 
