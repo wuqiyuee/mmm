@@ -1,3 +1,13 @@
+"""统一构造模式公司正式回归面板。
+
+提示公司口径由顶部开关选择：市值90分位、历史沪深300或两套均生成。
+从正式上游数据构造提示、控制变量和收益，不执行其他项目脚本。
+沪深300分支保留合格填充日起点。
+
+缩尾阈值在回归样本筛选前计算。
+按顶部选定的规格5或规格6，依次筛选两日、十一日回归样本。
+再统计提示范围、补齐缩尾列、生成未来提示标记并保存最终面板。
+"""
 
 import pandas as pd
 import numpy as np
@@ -13,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # "size90"（市值90分位）：公告前第3个交易日总市值严格高于所选月份的90分位断点。
 # "hs300"（历史沪深300）：按当前事件交易日的历史成分资格判断，不叠加市值门槛。
 # "both"（同时输出）：依次生成上述两套结果，每套完成后释放内存。
-CUE_DEFINITION = "both"
+CUE_DEFINITION = "hs300"
 
 # 沪深300模式复用已有历史成分区间文件；也可在 main（主函数）中传入其他路径。
 # 沪深300样本限定在成分文件覆盖期内，当前文件为2005年4月8日至2025年12月31日。
@@ -22,6 +32,11 @@ CUE_DEFINITION = "both"
 # 内部 S90p（原90分位后缀）工作列用于计算所选主口径，沪深300输出时统一改名。
 # 其他规模组仍按真实市值划分，可能与沪深300主组重叠。
 
+# 要输出的合并阶段回归样本筛选规格：
+# 5：公司×年度季度固定效应。
+# 6：公司×年度季度和日期两组固定效应。
+# (5, 6)表示分别生成并保存两套面板。
+REGRESSION_SAMPLE_SPECS = (5, 6)
 
 #pd.set_option('display.max_columns', None)
 #pd.set_option('display.width', None)
@@ -132,6 +147,8 @@ def build_pattern_paths(root, cue_definition="size90", hs300_membership_path=Non
             "中间结果/01_清洗后样本/市场交易日历_td.csv",
         "TRD_Dalyr_DGTW_path":
             "中间结果/01_清洗后样本/DGTW构建用个股日度面板.csv",
+        "eligibility_path":
+            "中间结果/01_清洗后样本/基础清洗后个股日度样本索引_td.csv",
         "marketcap_group_path":
             "中间结果/02_变量构造结果/8月度市值分组/月度市值分组.csv",
         "hs300_membership_path":
@@ -150,6 +167,10 @@ def build_pattern_paths(root, cue_definition="size90", hs300_membership_path=Non
             "中间结果/02_变量构造结果/3分段新闻_AES_AEV/DATAGO_分段新闻_真实交易日控制变量.csv",
         "adjusted_return_path":
             "中间结果/02_变量构造结果/1DGTW特征调整收益率/DGTW特征调整收益率.csv",
+        "formation_labels_path":
+            "中间结果/02_变量构造结果/1DGTW特征调整收益率/DGTW形成期组合标签.csv",
+        "benchmark_path":
+            "中间结果/02_变量构造结果/1DGTW特征调整收益率/DGTW组合基准收益.csv",
         "performance_forecast_controls_path":
             "中间结果/02_变量构造结果/5公司公告事件/业绩预告快报控制变量_公告日期口径.csv",
         "other_event_controls_path":
@@ -1710,6 +1731,7 @@ def load_pattern_daily_panel(daily_panel_path):
                 "Stkcd",
                 "td",
                 "Trddt",
+                "Filling",
                 "year",
                 "mktcap_tm3",
             ]
@@ -1720,6 +1742,7 @@ def load_pattern_daily_panel(daily_panel_path):
             {
                 "Stkcd": "string",
                 "td": "int32",
+                "Filling": "float32",
                 "year": "float32",
                 "mktcap_tm3": "float32",
             }
@@ -1762,13 +1785,122 @@ def load_pattern_daily_panel(daily_panel_path):
     return daily_panel
 
 # ============================================================
-# 将自身公告日映射到事件交易日，并生成 ownEA
+# 核对起点资格，并统一计算填充日起点收益
+# ============================================================
+
+def merge_pattern_start_eligibility(daily_panel, eligibility_path, start_date, end_date):
+    """按正式资格索引保留真实日与填充日起点，核对日期、序号和填充标志。"""
+    eligibility = pd.read_csv(
+        eligibility_path, usecols=["Stkcd", "Trddt", "td", "Filling"],
+        dtype={"Stkcd": "string", "td": "int32", "Filling": "float32"},
+        parse_dates=["Trddt"],
+    ).rename(columns={"Stkcd": "StkcdRecall"})
+    eligibility["StkcdRecall"] = eligibility["StkcdRecall"].apply(normalize_stock_code)
+    eligibility = eligibility.loc[eligibility["Trddt"].between(start_date, end_date)]
+    keys = ["StkcdRecall", "Trddt", "td"]
+    if (eligibility.empty or eligibility[keys].isna().any().any()
+            or eligibility["StkcdRecall"].eq("").any()
+            or not eligibility["Filling"].isin([0, 1]).all()
+            or eligibility.duplicated(["StkcdRecall", "Trddt"]).any()
+            or eligibility.duplicated(["StkcdRecall", "td"]).any()):
+        raise ValueError("正式起点资格索引为空、键异常或填充标志不是0/1。")
+    result = eligibility.merge(
+        daily_panel, on=keys, how="left", validate="1:1",
+        suffixes=("", "_daily"), indicator=True,
+    )
+    if (not result["_merge"].eq("both").all()
+            or not result["Filling"].eq(result["Filling_daily"]).all()):
+        raise ValueError("正式资格索引与日度面板的公司、日期、序号或填充标志不一致。")
+    return result.drop(columns=["Filling_daily", "_merge"])
+
+
+def merge_filled_adjusted_returns(daily_panel, paths):
+    """为合格填充日起点计算收益；真实日起点继续使用正式调整收益表。
+
+    固定使用既有形成标签及组合基准，不读取旧最终面板；只在此处计算填充收益。
+    先用双精度原始收益减基准，再转单精度，缩尾留到全样本统一阶段。
+    """
+    filled = daily_panel["Filling"].eq(1)
+    targets = daily_panel.loc[filled, ["StkcdRecall", "Trddt", "td"]].reset_index(drop=True)
+    if targets.empty:
+        return daily_panel
+    targets["formation_year"] = (
+        targets["Trddt"].dt.year - targets["Trddt"].dt.month.le(6).astype(int)
+    )
+    labels = pd.read_csv(
+        paths["formation_labels_path"],
+        usecols=["Stkcd", "formation_year", "dateBeg", "dateEnd", "portfolioNumber"],
+        dtype={"Stkcd": "string"}, parse_dates=["dateBeg", "dateEnd"],
+    ).rename(columns={"Stkcd": "StkcdRecall"})
+    labels["StkcdRecall"] = labels["StkcdRecall"].apply(normalize_stock_code)
+    if (labels.duplicated(["StkcdRecall", "formation_year"]).any()
+            or labels[["formation_year", "portfolioNumber", "dateBeg", "dateEnd"]].isna().any().any()
+            or labels["StkcdRecall"].eq("").any()
+            or not labels["dateBeg"].le(labels["dateEnd"]).all()):
+        raise ValueError("正式形成标签的公司年度键不唯一或持有期缺失。")
+    targets = targets.merge(labels, on=["StkcdRecall", "formation_year"], how="left", validate="m:1")
+    valid_label = targets["Trddt"].ge(targets["dateBeg"]) & targets["Trddt"].le(targets["dateEnd"])
+    targets.loc[~valid_label, "portfolioNumber"] = np.nan
+
+    suffixes = ["tm3", "tm2", "tm1", "t"] + [f"t_t{h}" for h in range(1, 51)]
+    raw_columns = [f"raw_ret_{suffix}" for suffix in suffixes]
+    bench_columns = [f"bench_ret_{suffix}" for suffix in suffixes]
+    output_columns = (
+        [f"chAdjreturn_{suffix}_Recall" for suffix in ["tm3", "tm2", "tm1", "t"]]
+        + [f"chAdjreturn_t_tp{h}_Recall" for h in range(1, 51)]
+    )
+    benchmark = pd.read_csv(
+        paths["benchmark_path"], usecols=["Trddt", "portfolioNumber", *bench_columns],
+        dtype={column: "float64" for column in bench_columns}, parse_dates=["Trddt"],
+    )
+    if (benchmark[["Trddt", "portfolioNumber"]].isna().any().any()
+            or benchmark.duplicated(["Trddt", "portfolioNumber"]).any()):
+        raise ValueError("正式组合基准的日期与组合编号键缺失或不唯一。")
+    targets = targets.merge(benchmark, on=["Trddt", "portfolioNumber"], how="left", validate="m:1")
+    bench_values = targets[bench_columns].to_numpy("float64")
+    if np.isinf(bench_values).any():
+        raise ValueError("填充日起点匹配的组合基准含无穷数值。")
+    target_index = pd.MultiIndex.from_frame(targets[["StkcdRecall", "td"]])
+    if not target_index.is_unique:
+        raise ValueError("填充日起点的公司交易日键不唯一。")
+    adjusted = np.full((len(targets), len(raw_columns)), np.nan, dtype="float32")
+    seen = np.zeros(len(targets), dtype=bool)
+    for part in pd.read_csv(
+        paths["TRD_Dalyr_DGTW_path"], usecols=["Stkcd", "Trddt", "td", *raw_columns],
+        dtype={"Stkcd": "string", "td": "int32", **{column: "float64" for column in raw_columns}},
+        parse_dates=["Trddt"], chunksize=200_000,
+    ):
+        part["Stkcd"] = part["Stkcd"].apply(normalize_stock_code)
+        location = target_index.get_indexer(pd.MultiIndex.from_arrays([part["Stkcd"], part["td"]]))
+        hit = location >= 0
+        selected = location[hit]
+        if len(np.unique(selected)) != len(selected) or seen[selected].any():
+            raise ValueError("日度面板存在重复的填充收益目标键。")
+        if not np.array_equal(part.loc[hit, "Trddt"].to_numpy(), targets.iloc[selected]["Trddt"].to_numpy()):
+            raise ValueError("填充收益目标的日期与市场日序号不一致。")
+        raw = part.loc[hit, raw_columns].to_numpy("float64")
+        if np.isinf(raw).any():
+            raise ValueError("填充日起点原始收益含无穷数值。")
+        adjusted[selected] = (raw - bench_values[selected]).astype("float32")
+        seen[selected] = True
+    if not seen.all() or np.isinf(adjusted).any():
+        raise ValueError("填充日起点原始收益未完整匹配，或转为单精度后出现无穷数值。")
+    daily_panel.loc[filled, output_columns] = adjusted
+    daily_panel.loc[filled, "portfolioNumber"] = targets["portfolioNumber"].to_numpy()
+    print("已统一计算填充日起点调整收益：", len(targets))
+    return daily_panel
+
+
+# ============================================================
+# 将自身公告日映射到事件交易日；主回归同时构造完整市场日历窗口
 # ============================================================
 
 def add_own_earnings_announcement_flag(
     daily_panel,
     report_path,
     event_date_mode,
+    calendar_path=None,
+    window=0,
 ):
     """将自身公告日期映射到交易日，并合并 ownEA 标记。"""
 
@@ -1796,11 +1928,19 @@ def add_own_earnings_announcement_flag(
         columns={"Stkcd": "StkcdRecall"}
     )
 
+    calendar_source = (
+        pd.read_csv(calendar_path, usecols=["Trddt", "td"], parse_dates=["Trddt"])
+        if calendar_path is not None else daily_panel[["Trddt", "td"]]
+    )
     calendar = (
-        daily_panel[["Trddt", "td"]]
+        calendar_source
         .drop_duplicates()
         .sort_values("Trddt")
     )
+    if calendar_path is not None and (calendar.empty or calendar[["Trddt", "td"]].isna().any().any()
+            or calendar.duplicated("Trddt").any() or calendar.duplicated("td").any()
+            or not np.all(np.diff(calendar["td"].to_numpy()) == 1)):
+        raise ValueError("公告映射需要日期、序号唯一且连续的正式市场日历。")
 
     announcement_dates = (
         report[["Annodt"]]
@@ -1829,14 +1969,14 @@ def add_own_earnings_announcement_flag(
             validate="many_to_one",
         )
         .dropna(subset=["Trddt"])
-        [["StkcdRecall", "Trddt"]]
+        [["StkcdRecall", "Trddt", "td"]]
         .drop_duplicates()
     )
 
     own_ea["ownEA"] = 1
 
     daily_panel = daily_panel.merge(
-        own_ea,
+        own_ea[["StkcdRecall", "Trddt", "ownEA"]],
         on=["StkcdRecall", "Trddt"],
         how="left",
         validate="one_to_one",
@@ -1847,6 +1987,19 @@ def add_own_earnings_announcement_flag(
         .fillna(0)
         .astype("int8")
     )
+
+    # 主回归直接使用全部公告的市场日序号，不因公司停牌而丢失窗口内公告。
+    # 默认window=0（窗口为零）保留其他调用方先标记、再单独构造窗口的接口。
+    if window:
+        if not isinstance(window, int) or isinstance(window, bool) or window < 0:
+            raise ValueError("公告窗口必须为非负整数。")
+        event_keys = pd.MultiIndex.from_frame(own_ea[["StkcdRecall", "td"]])
+        for offset in range(1, window + 1):
+            for prefix, sign in [("tm", -1), ("tp", 1)]:
+                target_keys = pd.MultiIndex.from_arrays([
+                    daily_panel["StkcdRecall"], daily_panel["td"] + sign * offset,
+                ])
+                daily_panel[f"ownEA_{prefix}{offset}"] = target_keys.isin(event_keys).astype("int8")
 
     print(
         "ownEA为1的数量：",
@@ -2276,6 +2429,116 @@ def merge_news_controls(daily_panel, news_path):
 # ============================================================
 # 将聚合后的提示事件表合并到日度主面板
 # ============================================================
+
+def read_filled_news_source(natural_path, actual_path, target_firm, target_day):
+    """只在合并入口重构填充日新闻；基准为严格早于当日的有效真实日。"""
+    count = len(target_firm)
+    target_key = target_firm.astype("int64") * 100_000 + target_day
+    target_index = pd.Index(target_key)
+    firm_set = set(target_firm.tolist())
+    levels = np.full((count, 2), np.nan, dtype="float64")
+    found = np.zeros(count, dtype=bool)
+    source_columns = ["Stkcd", "date", "AES", "AEV", "window_complete"]
+    source_types = {
+        "Stkcd": "int32", "date": "string", "AES": "float64", "AEV": "float64",
+        "window_complete": "bool",
+    }
+    for part in pd.read_csv(
+        natural_path, usecols=source_columns, dtype=source_types, chunksize=500_000,
+    ):
+        part = part.loc[part["Stkcd"].isin(firm_set)]
+        if part.empty:
+            continue
+        day = pd.to_datetime(part["date"], format="%Y-%m-%d").to_numpy("datetime64[D]").astype("int32")
+        key = part["Stkcd"].to_numpy("int64") * 100_000 + day
+        location = target_index.get_indexer(key)
+        hit = location >= 0
+        selected = location[hit]
+        if len(np.unique(selected)) != len(selected) or found[selected].any():
+            raise ValueError(f"自然日新闻目标键重复：{natural_path}")
+        current = part.loc[hit, ["AES", "AEV"]].to_numpy()
+        if not np.array_equal(np.isfinite(current[:, 1]), part.loc[hit, "window_complete"].to_numpy()):
+            raise ValueError(f"自然日新闻量与窗口完整标记冲突：{natural_path}")
+        levels[selected] = current
+        found[selected] = True
+
+    anchor_day = np.full(count, np.iinfo("int32").min, dtype="int32")
+    anchor_aes = np.full(count, np.nan)
+    anchor_aev = np.full(count, np.nan)
+    carry_firm, carry_aes, last_key = None, np.nan, None
+    for part in pd.read_csv(
+        actual_path, usecols=source_columns, dtype=source_types, chunksize=500_000,
+    ):
+        part = part.loc[part["Stkcd"].isin(firm_set) & part["AEV"].notna()]
+        if part.empty:
+            continue
+        firm = part["Stkcd"].to_numpy()
+        day = pd.to_datetime(part["date"], format="%Y-%m-%d").to_numpy("datetime64[D]").astype("int32")
+        key = firm.astype("int64") * 100_000 + day
+        if (np.diff(key) <= 0).any() or (last_key is not None and key[0] <= last_key):
+            raise ValueError(f"真实日新闻公司日期键重复或无序：{actual_path}")
+        last_key = int(key[-1])
+        effective_aes = part.groupby("Stkcd", sort=False)["AES"].ffill().to_numpy(copy=True)
+        if carry_firm == int(firm[0]) and np.isfinite(carry_aes):
+            effective_aes[(firm == carry_firm) & ~np.isfinite(effective_aes)] = carry_aes
+        carry_firm, carry_aes = int(firm[-1]), float(effective_aes[-1])
+        lower = np.searchsorted(target_firm, firm[0], side="left")
+        upper = np.searchsorted(target_firm, firm[-1], side="right")
+        positions = np.arange(lower, upper)
+        previous = np.searchsorted(key, target_key[positions], side="left") - 1
+        valid = previous >= 0
+        positions, previous = positions[valid], previous[valid]
+        valid = ((firm[previous] == target_firm[positions]) & (day[previous] > anchor_day[positions]))
+        positions, previous = positions[valid], previous[valid]
+        anchor_day[positions] = day[previous]
+        anchor_aes[positions] = effective_aes[previous]
+        anchor_aev[positions] = part["AEV"].to_numpy()[previous]
+
+    complete = np.isfinite(levels[:, 1])
+    has_anchor = np.isfinite(anchor_aev)
+    if (has_anchor & (anchor_day >= target_day)).any():
+        raise ValueError("填充日新闻基准误用了当日或未来信息。")
+    current_aes = levels[:, 0].copy()
+    fill = complete & ~np.isfinite(current_aes) & np.isfinite(anchor_aes)
+    current_aes[fill] = anchor_aes[fill]
+    usable = complete & np.isfinite(current_aes)
+    aes_base = np.where(np.isfinite(anchor_aes), anchor_aes, 50.0)
+    values = np.full((count, 4), np.nan, dtype="float32")
+    values[complete, :2] = 0
+    values[usable, 0] = current_aes[usable] > aes_base[usable]
+    values[usable, 1] = current_aes[usable] < aes_base[usable]
+    delta = levels[:, 1] - anchor_aev
+    delta[complete & ~has_anchor] = 0
+    values[complete, 2] = np.log1p(np.maximum(delta[complete], 0))
+    values[complete, 3] = np.log1p(np.maximum(-delta[complete], 0))
+    if np.isinf(values).any() or (levels[complete, 1] < 0).any():
+        raise ValueError(f"新闻控制出现无穷或新闻量为负：{natural_path}")
+    return values
+
+
+def merge_filled_news_controls(daily_panel, root):
+    """补齐正式合格填充日的四项新闻控制；两类新闻来源各自计算后分段使用。"""
+    targets = daily_panel.loc[
+        daily_panel["Filling"].eq(1), ["StkcdRecall", "Trddt"],
+    ].sort_values(["StkcdRecall", "Trddt"])
+    columns = ["aesIncrease", "aesDecrease", "logIncreaseAEV", "logDecreaseAEV"]
+    for source_name, mask, directory in [
+        ("报刊", targets["Trddt"].lt("2010-01-01"), "3报刊新闻_AES_AEV"),
+        ("网络", targets["Trddt"].ge("2010-01-01"), "3网络新闻_AES_AEV"),
+    ]:
+        part = targets.loc[mask]
+        if part.empty:
+            continue
+        source_dir = Path(root) / "中间结果/02_变量构造结果" / directory
+        values = read_filled_news_source(
+            source_dir / f"DATAGO_{source_name}新闻_AES_AEV_自然日.csv",
+            source_dir / f"DATAGO_{source_name}新闻_AES_AEV_真实交易日控制变量.csv",
+            part["StkcdRecall"].to_numpy("int32"),
+            part["Trddt"].to_numpy("datetime64[D]").astype("int32"),
+        )
+        daily_panel.loc[part.index, columns] = values
+    return daily_panel
+
 
 def merge_pattern_cue_events(
     daily_panel,
@@ -2840,51 +3103,101 @@ def prepare_pattern_baseline_inputs(daily_panel, winsor_limits):
 
 
 
-def baseline_regression_sample_mask(df, dep_col, rhs_cols, fe_cols, cluster_cols=None):
-    """
-    1. 回归变量、固定效应变量、聚类变量不能缺失；
-    2. 吸收固定效应后，删除 singleton（单例组），即固定效应组内只有 1 条观测的组。
-    """
+def baseline_regression_sample_mask(
+    df,
+    dep_col,
+    rhs_cols,
+    fe_cols,
+    cluster_cols=None,
+    regression_sample_spec=5,
+):
+    """检查必要变量，并按选定回归规格递归删除固定效应单例。"""
+
+    if regression_sample_spec not in (5, 6):
+        raise ValueError("合并阶段回归样本筛选规格只能为5或6。")
+
     cluster_cols = cluster_cols or []
-    needed_cols = [dep_col] + rhs_cols + fe_cols + cluster_cols
 
-    missing_cols = [c for c in needed_cols if c not in df.columns]
+    # 第一组固定效应：被提示公司×年度季度。
+    fe_groups = [fe_cols]
+
+    # 规格6另加日期固定效应，两组分别检查。
+    if regression_sample_spec == 6:
+        fe_groups.append(["Trddt"])
+
+    # 一、检查所需列是否存在。
+    fe_columns = []
+    for group_cols in fe_groups:
+        fe_columns.extend(group_cols)
+
+    numeric_cols = [dep_col] + rhs_cols
+    needed_cols = list(dict.fromkeys(
+        numeric_cols + fe_columns + cluster_cols
+    ))
+
+    missing_cols = [
+        column for column in needed_cols
+        if column not in df.columns
+    ]
     if missing_cols:
-        raise ValueError(f"缺少基准回归变量，不能复刻 e(sample)：{missing_cols}")
+        raise ValueError(f"缺少回归样本筛选所需变量：{missing_cols}")
 
-    print(f"[样本掩码] {dep_col}：开始检查必要变量是否缺失。", flush=True)
-    mask = df[needed_cols].notna().all(axis=1)
+    # 二、检查本轮回归必要变量是否完整、数值是否有效。
+    valid = df[needed_cols].notna().all(axis=1)
+
+    for column in numeric_cols:
+        valid &= np.isfinite(
+            df[column].to_numpy(dtype="float64")
+        )
+
+    # 只复制判断单例所需的列，保留原行索引。
+    sample_cols = list(dict.fromkeys([dep_col] + fe_columns))
+    sample = df.loc[valid, sample_cols].copy()
+
+    # 三、分别检查各组固定效应，递归删除单例。
+    total_removed = 0
+
+    while not sample.empty:
+        singleton = np.zeros(len(sample), dtype=bool)
+
+        for group_cols in fe_groups:
+            group_size = (
+                sample.groupby(
+                    group_cols,
+                    observed=True,
+                    sort=False,
+                )[dep_col]
+                .transform("size")
+                .to_numpy()
+            )
+            singleton |= group_size == 1
+
+        removed = int(singleton.sum())
+
+        if removed == 0:
+            break
+
+        total_removed += removed
+        sample = sample.loc[~singleton]
+
+    # 四、返回与输入表逐行对应的保留标记。
+    result = pd.Series(False, index=df.index)
+    result.loc[sample.index] = True
 
     print(
-        f"[样本掩码] {dep_col}：非缺失检查完成，"
-        "开始将固定效应键转为字符串并逐行拼接。",
+        f"回归样本筛选规格（{regression_sample_spec}）："
+        f"删除单例观测{total_removed:,}条，"
+        f"保留{len(sample):,}条。",
         flush=True,
     )
-    fe_key = (
-        df.loc[mask, fe_cols]
-        .astype(str)
-        .agg("×".join, axis=1)
-    )
 
-    print(
-        f"[样本掩码] {dep_col}：固定效应键拼接完成，开始统计组内数量。",
-        flush=True,
-    )
-    fe_count = fe_key.value_counts()
-    keep_index = fe_key.loc[fe_key.map(fe_count) > 1].index
+    return result
 
-    print(
-        f"[样本掩码] {dep_col}：组内数量判断完成，开始生成最终行掩码。",
-        flush=True,
-    )
-    out = pd.Series(False, index=df.index)
-    out.loc[keep_index] = True
-    print(f"[样本掩码] {dep_col}：最终行掩码生成完成。", flush=True)
-    return out
-
-
-def filter_pattern_baseline_sample(daily_panel):
-    """按当前规则，依次筛选两个基准回归所需的样本。"""
+def filter_pattern_baseline_sample(
+    daily_panel,
+    regression_sample_spec=5,
+):
+    """按选定规格，依次筛选两日和十一日基准回归样本。"""
 
     # 被提示公司自身财报公告及前后交易日标记。
     own_ea_cols = (
@@ -2928,6 +3241,7 @@ def filter_pattern_baseline_sample(daily_panel):
             rhs_cols=baseline_rhs,
             fe_cols=["StkcdRecall", "yearQuarter"],
             cluster_cols=["StkcdRecall", "Trddt"],
+            regression_sample_spec=regression_sample_spec,
         )
 
         print(
@@ -3201,13 +3515,14 @@ def build_pattern_variable_labels(cue_definition="size90"):
         "StkcdRecall": "被提示公司股票代码",
         "Trddt": "交易日期",
         "td": "交易日序号",
+        "Filling": "收益起始交易日的正式资格标志：0为真实日，1为合格填充日；不表示收益或新闻统一填0",
         "marketCap_Minus3_Recall": "被提示公司 t-3 日总市值",
 
         "return_t_Recall": "被提示公司 t 日原始收益率",
         "ownEA": "自身盈余公告日虚拟变量，等于1表示被提示公司在 t 日发布盈余公告",
 
-        "aesIncrease": "新闻情绪上升虚拟变量，使用上游真实交易日控制表口径",
-        "aesDecrease": "新闻情绪下降虚拟变量，使用上游真实交易日控制表口径",
+        "aesIncrease": "新闻情绪上升虚拟变量；真实日读正式分段控制表，沪深300填充日依自然日窗口及此前有效真实日重构",
+        "aesDecrease": "新闻情绪下降虚拟变量；真实日读正式分段控制表，沪深300填充日依自然日窗口及此前有效真实日重构",
         "logIncreaseAEV": "新闻覆盖量上升幅度的对数值，log(1+上升量)",
         "logDecreaseAEV": "新闻覆盖量下降幅度的对数值，log(1+下降量)",
         "ownOtherEventER": "被提示公司专题研究事件控制变量，十类专题事件的并集",
@@ -3317,6 +3632,7 @@ def save_pattern_final_sample(daily_panel, output_path):
 
     print("正在输出最终文件......")
 
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     daily_panel.to_csv(
         output_path,
         index=False,
@@ -3341,7 +3657,7 @@ def main(
     cue_definition=CUE_DEFINITION,
     hs300_membership_path=None,
 ):
-    """按顶部开关输出一种或两种提示样本，不自动切换回归缓存。
+    """按顶部提示口径开关输出一种或两种面板，并按所选回归规格筛样。
 
     单口径返回面板及统计结果；双口径仅返回两张最终面板的保存路径，
     每套完成后释放其大表，避免同时将两套面板保留在内存中。
@@ -3372,7 +3688,7 @@ def main(
                 cue_definition=definition,
                 hs300_membership_path=hs300_membership_path,
             )
-            output_paths[definition] = result["output_path"]
+            output_paths[definition] = result["output_paths"]
             del result
             gc.collect()
             print(f"{label}样本已保存并释放内存：{output_paths[definition]}", flush=True)
@@ -3506,23 +3822,28 @@ def main(
     del mm, mm_key, collapsed
     gc.collect()
 
-        # 第三阶段：读取日度主面板，合并事件、新闻和收益率。
+    # 第三阶段：在本入口统一起点资格、公告、新闻和收益，不继承旧最终面板。
     daily_panel = load_pattern_daily_panel(
         daily_panel_path=paths["TRD_Dalyr_DGTW_path"],
     )
+
+    if config["CUE_DEFINITION"] == "hs300":
+        daily_panel = merge_pattern_start_eligibility(
+            daily_panel, paths["eligibility_path"], hs300_start_date, hs300_end_date,
+        )
 
     # 映射被提示公司自身财报公告日。
     daily_panel = add_own_earnings_announcement_flag(
         daily_panel=daily_panel,
         report_path=paths["IAR_Rept_path"],
         event_date_mode=config["EVENT_DATE_MODE"],
+        calendar_path=paths["TRD_Cale_td_path"] if config["CUE_DEFINITION"] == "hs300" else None,
+        window=10 if config["CUE_DEFINITION"] == "hs300" else 0,
     )
 
     # 构造自身财报公告前后十个交易日的控制变量。
-    daily_panel = add_own_ea_windows(
-        daily_panel=daily_panel,
-        window=10,
-    )
+    if config["CUE_DEFINITION"] != "hs300":
+        daily_panel = add_own_ea_windows(daily_panel=daily_panel, window=10)
 
     # 合并业绩预告或快报、十类专题事件控制变量。
     daily_panel = merge_own_event_controls(
@@ -3538,6 +3859,8 @@ def main(
         daily_panel=daily_panel,
         news_path=paths["AES_AEV_controls_path"],
     )
+    if config["CUE_DEFINITION"] == "hs300":
+        daily_panel = merge_filled_news_controls(daily_panel, root)
 
     # 直接合并前一阶段保留的提示事件汇总表。
     daily_panel = merge_pattern_cue_events(
@@ -3556,18 +3879,11 @@ def main(
         daily_panel=daily_panel,
         adjusted_return_path=paths["adjusted_return_path"],
     )
-
-    # 公告窗口已使用周边日度记录构造完毕，此时再限制沪深300可识别期间。
-    # 覆盖期外成员资格未知，不能将这些公司日的提示指标当作0进入回归。
     if config["CUE_DEFINITION"] == "hs300":
-        in_coverage = daily_panel["Trddt"].between(hs300_start_date, hs300_end_date)
-        daily_panel = daily_panel.loc[in_coverage].copy()
-        print(
-            f"沪深300样本覆盖期：{hs300_start_date:%Y-%m-%d}至{hs300_end_date:%Y-%m-%d}；"
-            f"保留公司日记录数：{len(daily_panel)}"
-        )
+        daily_panel = merge_filled_adjusted_returns(daily_panel, paths)
 
-        # 第四阶段：构造分组，准备并筛选基准样本。
+    # 第四阶段：构造分组，准备并筛选基准样本。
+    # 沪深300起点已在正式资格合并时限定覆盖期；公告仍使用完整市场日历。
 
     # 构造干扰指标的年度高低组。
     daily_panel = add_interference_groups(
@@ -3603,91 +3919,130 @@ def main(
         winsor_limits=winsor_limits,
     )
 
+
     print("[处理进度] 基准变量准备完成。", flush=True)
-    print(
-        "[处理进度] 开始短窗口、长窗口两轮基准样本筛选。",
-        flush=True,
-    )
 
-    # 沿用原来的筛样条件：先短窗口，再长窗口。
-    daily_panel = filter_pattern_baseline_sample(
-        daily_panel=daily_panel,
-    )
+    # 一、检查要输出的规格，以及共用的缩尾边界。
+    if (
+        not REGRESSION_SAMPLE_SPECS
+        or any(spec not in (5, 6) for spec in REGRESSION_SAMPLE_SPECS)
+    ):
+        raise ValueError("要输出的回归样本筛选规格只能包含5或6。")
 
-    print(
-        f"[处理进度] 两轮基准样本筛选完成，当前表结构：{daily_panel.shape}。",
-        flush=True,
-    )
+    if config["CUE_DEFINITION"] == "hs300":
+        bounds = np.asarray(
+            [
+                winsor_limits[f"chAdjreturn_t_tp{h}_Recall"]
+                for h in range(1, 51)
+            ],
+            dtype="float64",
+        )
 
-    # 样本确定后，再整理列顺序、行顺序和索引。
-    front_cols = ["StkcdRecall", "Trddt"]
-    other_cols = [
-        col
-        for col in daily_panel.columns
-        if col not in front_cols
-    ]
+        if (
+            not np.isfinite(bounds).all()
+            or (bounds[:, 0] > bounds[:, 1]).any()
+        ):
+            raise ValueError("50个收益窗口的缩尾边界无效，不保存。")
 
-    print(
-        "[处理进度] 开始对筛选后的面板进行列重排、排序和重置索引。",
-        flush=True,
-    )
+    # 二、保留同一份筛样前面板，供两种规格分别使用。
+    panel_before_screening = daily_panel
+    del daily_panel
 
-    daily_panel = (
-        daily_panel[front_cols + other_cols]
-        .sort_values(["StkcdRecall", "Trddt"])
-        .reset_index(drop=True)
-    )
+    output_paths = {}
 
-    print("[处理进度] 筛选后面板的整表整理完成。", flush=True)
+    for regression_sample_spec in REGRESSION_SAMPLE_SPECS:
+        print(
+            f"开始生成筛样规格（{regression_sample_spec}）的面板。",
+            flush=True,
+        )
 
-    # 第五阶段：统计提示范围，并完成最终样本整理。
+        # 每种规格均从同一份筛样前面板开始。
+        # 筛样函数返回新表，后续处理不修改筛样前面板。
+        daily_panel = filter_pattern_baseline_sample(
+            daily_panel=panel_before_screening,
+            regression_sample_spec=regression_sample_spec,
+        )
 
-    # 使用聚合前保留的配对表，统计最终样本中的提示范围。
-    nr_firms_cued, nr_firms_cued_summary = summarize_pattern_cue_reach(
-        daily_panel=daily_panel,
-        cue_pairs=cue_pairs,
-    )
+        if daily_panel.empty:
+            raise ValueError(
+                f"筛样规格（{regression_sample_spec}）没有剩余观测。"
+            )
 
-    # 复用筛选前的阈值，补生成其余缩尾列。
-    daily_panel = add_remaining_pattern_winsor_cols(
-        daily_panel=daily_panel,
-        winsor_source_cols=winsor_source_cols,
-        winsor_limits=winsor_limits,
-    )
+        # 三、整理本规格面板的列顺序、行顺序和索引。
+        front_cols = ["StkcdRecall", "Trddt"]
+        other_cols = [
+            column for column in daily_panel.columns
+            if column not in front_cols
+        ]
 
-    # 根据最终基准样本构造未来提示标记。
-    daily_panel = add_future_pattern_cue_flags(
-        daily_panel=daily_panel,
-    )
+        daily_panel = (
+            daily_panel[front_cols + other_cols]
+            .sort_values(["StkcdRecall", "Trddt"])
+            .reset_index(drop=True)
+        )
 
-    # 删除最终输出不需要的中间列。
-    daily_panel = clean_pattern_final_columns(
-        daily_panel=daily_panel,
-    )
+        # 四、按本规格的最终样本统计提示范围。
+        nr_firms_cued, nr_firms_cued_summary = summarize_pattern_cue_reach(
+            daily_panel=daily_panel,
+            cue_pairs=cue_pairs,
+        )
 
-    # 所有内部计算完成后再统一命名，保证沪深300主组不会被误读为市值90分位组。
-    daily_panel = format_pattern_cue_output(
-        daily_panel,
-        cue_definition=config["CUE_DEFINITION"],
-    )
+        # 五、使用共用的筛样前阈值，补生成其余缩尾列。
+        daily_panel = add_remaining_pattern_winsor_cols(
+            daily_panel=daily_panel,
+            winsor_source_cols=winsor_source_cols,
+            winsor_limits=winsor_limits,
+        )
 
-    # 构造中文说明字典。
-    variable_labels = build_pattern_variable_labels(config["CUE_DEFINITION"])
+        # 六、按本规格保留的提示事件，独立生成未来提示标记。
+        daily_panel = add_future_pattern_cue_flags(
+            daily_panel=daily_panel,
+        )
 
-    # 保存最终回归面板。
-    save_pattern_final_sample(
-        daily_panel=daily_panel,
-        output_path=paths["output_path"],
-    )
+        # 七、清理中间变量，统一输出列名。
+        daily_panel = clean_pattern_final_columns(
+            daily_panel=daily_panel,
+        )
 
-    # 返回结果，供后续查阅和分析。
+        daily_panel = format_pattern_cue_output(
+            daily_panel,
+            cue_definition=config["CUE_DEFINITION"],
+        )
+
+        # 八、在原文件名末尾增加筛样规格后缀。
+        base_output_path = paths["output_path"]
+        output_path = base_output_path.with_name(
+            f"{base_output_path.stem}"
+            f"_筛样规格{regression_sample_spec}"
+            f"{base_output_path.suffix}"
+        )
+
+        save_pattern_final_sample(
+            daily_panel=daily_panel,
+            output_path=output_path,
+        )
+
+        output_paths[regression_sample_spec] = output_path
+
+        print(
+            f"筛样规格（{regression_sample_spec}）已保存：{output_path}",
+            flush=True,
+        )
+
+        # 本规格保存后释放其面板，继续处理下一种规格。
+        del daily_panel, nr_firms_cued, nr_firms_cued_summary
+        gc.collect()
+
+    del panel_before_screening
+    gc.collect()
+
+    # 返回各规格的保存路径，避免在返回结果中保留两份大面板。
     return {
-        "daily_panel": daily_panel,
-        "nr_firms_cued": nr_firms_cued,
-        "nr_firms_cued_summary": nr_firms_cued_summary,
-        "variable_labels": variable_labels,
         "cue_definition": config["CUE_DEFINITION"],
-        "output_path": paths["output_path"],
+        "output_paths": output_paths,
+        "variable_labels": build_pattern_variable_labels(
+            config["CUE_DEFINITION"]
+        ),
     }
 
 

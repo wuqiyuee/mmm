@@ -4,14 +4,17 @@
 提示，个人365天共同覆盖排除，提示方保留金融和房地产，数行者两段
 新闻，允许合格填充日起点，保留全部年份，不追加被提示方市值、房地产
 或60个月交易史筛选。底层非金融、上市期限等资格继续保留。
-直接读取已验证的季度观测和50窗收益缓存，不读取旧市值90分位提示列，
-不改写旧最终面板，也不调用临时网格或自动准备输入。
+直接读取“中间结果/04_合并数据/Pattern样本_最终回归面板_沪深300.csv”。
+提示、控制变量、收益缩尾及两轮回归样本筛选由合并脚本完成。
+本脚本只读取正式面板、估计和导出，不调用数据构造脚本。
 
 仅估计当前选定的模式关系主样本。保留两日、十一日窗口和六列递进
 结构，第（6）列为公司×年度季度＋日期双固定效应主规格，共12个模型。
 收益完整资格只检查两日、十一日窗口，不额外要求三日后、五日后窗口完整。
-收益沿用原全样本双侧1%缩尾值。各模型按自身固定效应递归删单例；
+收益沿用统一沪深300面板的全样本双侧1%缩尾值，不在回归时重新缩尾。
+各模型按自身固定效应递归删单例；
 协方差有限样本修正和精确残差自由度与图2统一。
+输入一行代表被提示公司×收益起始交易日，唯一键为公司与日期。
 模型汇总一行代表“样本×收益窗口×规格”，系数明细再按变量展开。
 输出集中到项目根目录下“图表结果／01_主线图表／表2_收益回归”，
 保留原模型汇总与系数明细文件名、列名、单位和导出编码。
@@ -31,6 +34,7 @@ from scipy import sparse, stats
 from scipy.sparse.csgraph import connected_components
 
 
+# 一、定位项目，导入统一数据口径和双向聚类协方差算法
 def find_project_root() -> Path:
     """从当前文件的祖先目录寻找同时含项目说明、代码和中间结果的根目录。"""
     for candidate in Path(__file__).resolve().parents:
@@ -47,54 +51,67 @@ PROJECT_ROOT = find_project_root()
 COMMON_DIR = PROJECT_ROOT / "code" / "07_实证分析" / "90_公共模块"
 if str(COMMON_DIR) not in sys.path:
     sys.path.insert(0, str(COMMON_DIR))
-from 主回归口径 import (
-    CONTROL_COLUMNS, CUE_COLUMN, EVENT_COLUMNS, NEWS_COLUMNS, OWN_EA_COLUMNS,
-    SPEC_DESCRIPTION, SPEC_ID, iter_main_blocks,
+# 正式输入：直接使用合并脚本生成的沪深300最终面板。
+# 选择输入面板的回归样本筛选规格：5或6。
+INPUT_SAMPLE_SPEC = 5
+
+if INPUT_SAMPLE_SPEC not in (5, 6):
+    raise ValueError("输入面板的筛样规格只能选择5或6。")
+
+INPUT_PANEL_PATH = PROJECT_ROOT / (
+    "中间结果/04_合并数据/"
+    f"Pattern样本_最终回归面板_沪深300_筛样规格{INPUT_SAMPLE_SPEC}.csv"
 )
+
+# 提示变量及当前研究口径说明。
+CUE_COLUMN = "quarterLag1HS300"
+
+SPEC_ID = (
+    "沪深300_个人365天_数行者分段_允许填充_全期"
+    f"_筛样规格{INPUT_SAMPLE_SPEC}"
+)
+
+SPEC_DESCRIPTION = (
+    "历史沪深300提示；个人365天共同覆盖排除；一级供应链及同行业排除；"
+    "提示方保留金融和房地产；被提示方沿用非金融等基础资格、保留房地产，"
+    "不追加市值和60个月交易史筛选；2005—2009年数行者报刊、"
+    "2010—2025年数行者网络；允许合格填充日起点；保留全部年份"
+)
+
+# 21项自身财报公告控制：公告前10日、当日、公告后10日。
+OWN_EA_COLUMNS = (
+    [f"ownEA_tm{i}" for i in range(10, 0, -1)]
+    + ["ownEA"]
+    + [f"ownEA_tp{i}" for i in range(1, 11)]
+)
+
+# 2项其他公告控制。
+EVENT_COLUMNS = [
+    "ownOtherEventER",
+    "ownPerformanceForecastBrief",
+]
+
+# 4项新闻控制。
+NEWS_COLUMNS = [
+    "aesIncrease",
+    "aesDecrease",
+    "logIncreaseAEV",
+    "logDecreaseAEV",
+]
+
+# 完整控制变量，共27项。
+CONTROL_COLUMNS = OWN_EA_COLUMNS + EVENT_COLUMNS + NEWS_COLUMNS
+
 from 图2图3扩展_日期固定效应回归公共模块 import two_way_cluster_covariance
 
+
+# 二、设置表2输出路径、六个回归规格和两个收益窗口
 OUTPUT_DIR = PROJECT_ROOT / "图表结果" / "01_主线图表" / "表2_收益回归"
 TABLE2_RESULTS_PATH = OUTPUT_DIR / "表2_模型汇总.csv"
 TABLE2_COEFFICIENTS_PATH = OUTPUT_DIR / "表2_系数明细.csv"
 
 
-# 被提示公司的盈余公告列
-own_ea_cols = OWN_EA_COLUMNS
-
-
-# 新闻列
-media_cols = NEWS_COLUMNS
-
-
-# 收益列
-return_cols = [
-    "chAdjreturn_t_tp1_Recall_w",
-    "chAdjreturn_t_tp10_Recall_w",
-]
-
-
-def significance_stars(p_value):
-    """根据双侧检验的 p 值生成显著性星号。"""
-    if p_value < 0.01:
-        return "***"
-    if p_value < 0.05:
-        return "**"
-    if p_value < 0.10:
-        return "*"
-    return ""
-
-
-# 控制其他重大事件
-table2_disclosure_cols = EVENT_COLUMNS
-
-# 完整控制变量：自身盈余公告列、其他重大事件列、媒体变量
-table2_full_controls = (
-    own_ea_cols
-    + table2_disclosure_cols
-    + media_cols
-)
-
-# 六个递进回归规格
+# 六个回归规格使用本文件上方定义的控制变量。
 table2_specifications = [
     {
         "规格": "(1)",
@@ -105,46 +122,62 @@ table2_specifications = [
     {
         "规格": "(2)",
         "规格说明": "自身盈余公告控制、无固定效应",
-        "控制变量": own_ea_cols,
+        "控制变量": OWN_EA_COLUMNS,
         "固定效应": [],
     },
     {
         "规格": "(3)",
         "规格说明": "完整控制变量、无固定效应",
-        "控制变量": table2_full_controls,
+        "控制变量": CONTROL_COLUMNS,
         "固定效应": [],
     },
     {
         "规格": "(4)",
         "规格说明": "完整控制变量、日期固定效应",
-        "控制变量": table2_full_controls,
+        "控制变量": CONTROL_COLUMNS,
         "固定效应": ["date"],
     },
     {
         "规格": "(5)",
         "规格说明": "完整控制变量、公司×年度季度固定效应",
-        "控制变量": table2_full_controls,
+        "控制变量": CONTROL_COLUMNS,
         "固定效应": ["firm_yearquarter"],
     },
     {
         "规格": "(6)",
         "规格说明": "完整控制变量、日期和公司×年度季度固定效应",
-        "控制变量": table2_full_controls,
+        "控制变量": CONTROL_COLUMNS,
         "固定效应": ["date", "firm_yearquarter"],
     },
 ]
 
-# 两个收益窗口；每个窗口依次运行上述六种规格
+# 每项依次为：窗口终点、因变量列名、窗口标签。
+# 终点1对应两日累计收益，终点10对应十一日累计收益。
+# 读取收益列、检查收益完整性和运行回归均使用这一份设置。
 table2_outcomes = [
     (
+        1,
         "chAdjreturn_t_tp1_Recall_w",
         "[t, t+1]",
     ),
     (
+        10,
         "chAdjreturn_t_tp10_Recall_w",
         "[t, t+10]",
     ),
 ]
+
+
+# 三、单模型估计与结果整理，供表2和图2共同使用
+def significance_stars(p_value):
+    """根据双侧检验的 p 值生成显著性星号。"""
+    if p_value < 0.01:
+        return "***"
+    if p_value < 0.05:
+        return "**"
+    if p_value < 0.10:
+        return "*"
+    return ""
 
 
 def drop_fe_singletons_iteratively(reg, fe_code_cols):
@@ -506,15 +539,110 @@ def run_return_regression(
     return regression_row, coefficient_rows
 
 
-def run_table2_sample(
-    data,
-    sample_name,
-    sample_label,
-):
+# 四、直接读取正式合并面板，组装表2回归数据
+def load_selected_main_panel() -> pd.DataFrame:
+    """读取合并阶段已经筛好的样本，不重新缩尾或改变筛样口径。"""
+
+    if not INPUT_PANEL_PATH.is_file():
+        raise FileNotFoundError(
+            f"找不到正式合并面板：{INPUT_PANEL_PATH}"
+        )
+
+    # 只读取表2需要的两个收益窗口及控制变量。
+    return_columns = [
+        column for _, column, _ in table2_outcomes
+    ]
+
+    numeric_columns = [
+        CUE_COLUMN,
+        *CONTROL_COLUMNS,
+        *return_columns,
+    ]
+
+    read_columns = [
+        "StkcdRecall",
+        "Trddt",
+        "Filling",
+        "cueDefinition",
+        *numeric_columns,
+    ]
+
+    # 沿用此前读取时的单精度数值类型。
+    column_types = {
+        column: "float32"
+        for column in numeric_columns
+    }
+    column_types.update({
+        "StkcdRecall": "int32",
+        "Filling": "float32",
+        "cueDefinition": "string",
+    })
+
+    print(f"正在读取正式合并面板：{INPUT_PANEL_PATH}", flush=True)
+
+    data = pd.read_csv(
+        INPUT_PANEL_PATH,
+        usecols=read_columns,
+        dtype=column_types,
+        encoding="utf-8-sig",
+    )
+
+    if data.empty:
+        raise ValueError("正式合并面板没有观测。")
+
+    data["Trddt"] = pd.to_datetime(
+        data["Trddt"],
+        errors="raise",
+    )
+
+    # 检查日期、唯一键和提示公司口径。
+    if data["Trddt"].isna().any():
+        raise ValueError("正式面板中存在缺失日期。")
+
+    if data.duplicated(["StkcdRecall", "Trddt"]).any():
+        raise ValueError("被提示公司与日期的组合不唯一。")
+
+    if not data["cueDefinition"].eq("hs300").fillna(False).all():
+        raise ValueError("输入面板不是统一的沪深300提示口径。")
+
+    # 面板应已完成两窗及完整控制变量的共同资格筛选。
+    # 出现异常时提示核对合并步骤，不在这里静默删样本。
+    for column in numeric_columns:
+        if not np.isfinite(data[column].to_numpy()).all():
+            raise ValueError(
+                f"正式面板的 {column} 存在缺失或无穷值，"
+                "请核对合并阶段的回归样本筛选。"
+            )
+
+    for column in [CUE_COLUMN, "Filling"]:
+        if not data[column].isin([0, 1]).all():
+            raise ValueError(f"{column} 必须全部为0或1。")
+
+    # 生成回归需要的分类标识。
+    data.drop(columns=["cueDefinition"], inplace=True)
+    data["Filling"] = data["Filling"].astype("uint8")
+    data["StkcdRecall"] = data["StkcdRecall"].astype("category")
+    data["yearQuarter"] = (
+        data["Trddt"].dt.to_period("Q").astype("category")
+    )
+
+    print(f"表2正式面板读取完成：{len(data):,}条观测。", flush=True)
+
+    return data
+
+# 五、按两个窗口、六个规格依次估计，保存表2结果
+def main() -> list[Path]:
+    """估计选定主样本的两窗口六规格，共12模型；不夹入旧口径完整样本。"""
+    # 1. 读取当前选定的模式关系主样本。
+    print(f"当前正式表2口径：{SPEC_DESCRIPTION}")
+    data = load_selected_main_panel()
+    sample_name = "pattern"
+    sample_label = "A. 沪深300提示主样本（模式关系）"
+
+    # 2. 每个收益窗口依次运行六个规格，汇总模型信息和全部系数。
     model_rows = []
     coefficient_rows = []
-
-    for outcome, window_label in table2_outcomes:
+    for _, outcome, window_label in table2_outcomes:
         for specification in table2_specifications:
             print(
                 f"正在运行表2：{sample_label}，"
@@ -528,7 +656,6 @@ def run_table2_sample(
                 window_label=window_label,
                 specification=specification,
             )
-
             model_rows.append(
                 {
                     "样本": sample_name,
@@ -536,7 +663,6 @@ def run_table2_sample(
                     **model_row,
                 }
             )
-
             coefficient_rows.extend(
                 {
                     "样本": sample_name,
@@ -546,56 +672,12 @@ def run_table2_sample(
                 for row in model_coefficient_rows
             )
 
-    return (
-        pd.DataFrame(model_rows),
-        pd.DataFrame(coefficient_rows),
-    )
-
-
-def load_selected_main_panel() -> pd.DataFrame:
-    """按两日、十一日收益共同完整资格组装主样本，不改写原最终面板。"""
-    pieces = []
-    for block, returns, controls, cue, common in iter_main_blocks(
-        required_horizons=(1, 10)
-    ):
-        positions = np.flatnonzero(common)
-        frame = pd.DataFrame(controls[positions], columns=CONTROL_COLUMNS)
-        frame["StkcdRecall"] = block["firm"][positions]
-        frame["Trddt"] = pd.to_datetime(block["date"][positions], unit="D", origin="unix")
-        frame["Filling"] = block["filled"][positions]
-        frame[CUE_COLUMN] = cue[positions]
-        # 50窗缓存按h=1…50排列，第0、9列分别是真正的两日、十一日收益。
-        for horizon, column in zip((1, 10), return_cols):
-            frame[column] = returns[positions, horizon - 1]
-        pieces.append(frame)
-    if not pieces:
-        raise ValueError("当前沪深300主口径没有可用观测。")
-    data = pd.concat(pieces, ignore_index=True)
-    del pieces
-    data["StkcdRecall"] = data["StkcdRecall"].astype("category")
-    data["yearQuarter"] = data["Trddt"].dt.to_period("Q").astype("category")
-    print(f"沪深300主样本基础观测：{len(data):,}；包含合格填充日起点。")
-    return data
-
-
-def main() -> list[Path]:
-    """估计选定主样本的两窗口六规格，共12模型；不夹入旧口径完整样本。"""
-    print(f"当前正式表2口径：{SPEC_DESCRIPTION}")
-    main = load_selected_main_panel()
-    (
-        table2_pattern_results,
-        table2_pattern_coefficients,
-    ) = run_table2_sample(
-        data=main,
-        sample_name="pattern",
-        sample_label="A. 沪深300提示主样本（模式关系）",
-    )
-
-    del main
+    del data
     gc.collect()
-    table2_results = table2_pattern_results
-    table2_coefficients = table2_pattern_coefficients
+    table2_results = pd.DataFrame(model_rows)
+    table2_coefficients = pd.DataFrame(coefficient_rows)
 
+    # 3. 沿用原路径、列顺序、单位和编码，保存两张结果表。
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     table2_results.to_csv(
         TABLE2_RESULTS_PATH,

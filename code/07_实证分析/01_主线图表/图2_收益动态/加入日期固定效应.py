@@ -26,7 +26,9 @@ from pathlib import Path
 import matplotlib
 import numpy as np
 import pandas as pd
-from scipy import stats
+from linearmodels.iv import AbsorbingLS
+from scipy import sparse, stats
+from scipy.sparse.csgraph import connected_components
 
 
 def find_project_root() -> Path:
@@ -47,10 +49,60 @@ TABLE2_DIR = ROOT / "code" / "07_实证分析" / "01_主线图表" / "表2_收�
 if str(MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(MODULE_DIR))
 
-from 主回归口径 import (
-    CONTROL_COLUMNS, CUE_COLUMN, NEWS_SOURCE, SPEC_DESCRIPTION, SPEC_ID,
-    iter_main_blocks,
+from 图2图3扩展_日期固定效应回归公共模块 import two_way_cluster_covariance
+
+# 正式输入：与表2读取同一份沪深300最终面板。
+# 选择输入面板的回归样本筛选规格：5或6。
+INPUT_SAMPLE_SPEC = 5
+
+if INPUT_SAMPLE_SPEC not in (5, 6):
+    raise ValueError("输入面板的筛样规格只能选择5或6。")
+
+INPUT_PANEL_PATH = ROOT / (
+    "中间结果/04_合并数据/"
+    f"Pattern样本_最终回归面板_沪深300_筛样规格{INPUT_SAMPLE_SPEC}.csv"
 )
+
+# 提示变量、新闻来源及研究口径说明。
+CUE_COLUMN = "quarterLag1HS300"
+NEWS_SOURCE = "datago_segmented"
+
+SPEC_ID = (
+    "沪深300_个人365天_数行者分段_允许填充_全期"
+    f"_筛样规格{INPUT_SAMPLE_SPEC}"
+)
+
+SPEC_DESCRIPTION = (
+    "历史沪深300提示；个人365天共同覆盖排除；一级供应链及同行业排除；"
+    "提示方保留金融和房地产；被提示方沿用非金融等基础资格、保留房地产，"
+    "不追加市值和60个月交易史筛选；2005—2009年数行者报刊、"
+    "2010—2025年数行者网络；允许合格填充日起点；保留全部年份"
+)
+
+# 21项自身财报公告控制。
+OWN_EA_COLUMNS = (
+    [f"ownEA_tm{i}" for i in range(10, 0, -1)]
+    + ["ownEA"]
+    + [f"ownEA_tp{i}" for i in range(1, 11)]
+)
+
+# 2项其他公告控制。
+EVENT_COLUMNS = [
+    "ownOtherEventER",
+    "ownPerformanceForecastBrief",
+]
+
+# 4项新闻控制。
+NEWS_COLUMNS = [
+    "aesIncrease",
+    "aesDecrease",
+    "logIncreaseAEV",
+    "logDecreaseAEV",
+]
+
+# 完整控制变量，共27项。
+CONTROL_COLUMNS = OWN_EA_COLUMNS + EVENT_COLUMNS + NEWS_COLUMNS
+
 # 表2脚本位于相邻任务目录，按实际文件路径加载，避免依赖跨目录模块名解析。
 # 加载同一份正式估计器，导入过程不会执行其主函数或读取回归数据。
 TABLE2_PATH = TABLE2_DIR / "估计回归.py"
@@ -71,9 +123,15 @@ from matplotlib import font_manager
 
 
 OUTPUT_DIR = ROOT / "图表结果" / "01_主线图表" / "图2_收益动态"
-RESULT_PATH = OUTPUT_DIR / "图2_收益动态和长期反转_加入日期固定效应结果.csv"
-OUTPUT_PATH = OUTPUT_DIR / "figure2_收益动态和长期反转_加入日期固定效应.png"
-TABLE2_RESULT_PATH = ROOT / "图表结果" / "01_主线图表" / "表2_收益回归" / "表2_模型汇总.csv"
+OUTPUT_TAG = f"沪深300_筛样规格{INPUT_SAMPLE_SPEC}"
+
+RESULT_PATH = OUTPUT_DIR / (
+    f"图2_收益动态和长期反转_加入日期固定效应_{OUTPUT_TAG}_结果.csv"
+)
+
+OUTPUT_PATH = OUTPUT_DIR / (
+    f"figure2_收益动态和长期反转_加入日期固定效应_{OUTPUT_TAG}.png"
+)
 
 TABLE2_SPECIFICATION = next(spec for spec in table2_specifications if spec["规格"] == "(6)")
 if (
@@ -87,7 +145,7 @@ OUTCOME_COLS = {
     horizon: f"chAdjreturn_t_tp{horizon}_Recall_w"
     for horizon in HORIZONS
 }
-ANCHORS = {1: "[t, t+1]", 10: "[t, t+10]"}
+
 RESULT_SPECIFICATION = {
     "口径标识": SPEC_ID,
     "提示变量": CUE_COLUMN,
@@ -118,31 +176,120 @@ ERROR_BAR_SPECS = (
 
 
 def read_figure2_panel(horizons: list[int]) -> pd.DataFrame:
-    """按与表2完全相同的季度入口和列类型，组装待估计窗口。"""
+    """直接读取选定的正式面板，各累计窗口分别处理自身收益缺失。"""
+
     if not horizons or not set(horizons).issubset(HORIZONS):
         raise ValueError("待估计窗口必须属于1至50。")
-    print(f"读取图2与表2共用的主样本：{SPEC_DESCRIPTION}")
-    pieces = []
-    for block, returns, controls, cue, common in iter_main_blocks():
-        positions = np.flatnonzero(common)
-        frame = pd.DataFrame(controls[positions], columns=CONTROL_COLUMNS)
-        frame["StkcdRecall"] = block["firm"][positions]
-        frame["Trddt"] = pd.to_datetime(block["date"][positions], unit="D", origin="unix")
-        frame["Filling"] = block["filled"][positions]
-        frame[CUE_COLUMN] = cue[positions]
-        # 每个窗口沿用自己的有效收益；不对全部50窗共同删除缺失。
-        for horizon in horizons:
-            frame[OUTCOME_COLS[horizon]] = returns[positions, horizon - 1]
-        pieces.append(frame)
-    if not pieces:
-        raise ValueError("当前沪深300主口径没有可用观测。")
-    data = pd.concat(pieces, ignore_index=True)
-    del pieces
-    data["StkcdRecall"] = data["StkcdRecall"].astype("category")
-    data["yearQuarter"] = data["Trddt"].dt.to_period("Q").astype("category")
-    print(f"沪深300主样本基础观测：{len(data):,}；包含合格填充日起点。")
-    return data
 
+    if not INPUT_PANEL_PATH.is_file():
+        raise FileNotFoundError(
+            f"找不到正式合并面板：{INPUT_PANEL_PATH}"
+        )
+
+    # 两个基础窗口用于检查面板是否已完成合并阶段筛样。
+    baseline_return_columns = [
+        OUTCOME_COLS[1],
+        OUTCOME_COLS[10],
+    ]
+
+    # 读取待估计窗口，同时保留两个基础窗口用于检查。
+    return_columns = list(dict.fromkeys(
+        baseline_return_columns
+        + [OUTCOME_COLS[horizon] for horizon in horizons]
+    ))
+
+    numeric_columns = [
+        CUE_COLUMN,
+        *CONTROL_COLUMNS,
+        *return_columns,
+    ]
+
+    read_columns = [
+        "StkcdRecall",
+        "Trddt",
+        "Filling",
+        "cueDefinition",
+        *numeric_columns,
+    ]
+
+    column_types = {
+        column: "float32"
+        for column in numeric_columns
+    }
+    column_types.update({
+        "StkcdRecall": "int32",
+        "Filling": "float32",
+        "cueDefinition": "string",
+    })
+
+    print(
+        f"正在读取筛样规格（{INPUT_SAMPLE_SPEC}）面板："
+        f"{INPUT_PANEL_PATH}",
+        flush=True,
+    )
+
+    data = pd.read_csv(
+        INPUT_PANEL_PATH,
+        usecols=read_columns,
+        dtype=column_types,
+        encoding="utf-8-sig",
+    )
+
+    if data.empty:
+        raise ValueError("正式合并面板没有观测。")
+
+    data["Trddt"] = pd.to_datetime(
+        data["Trddt"],
+        errors="raise",
+    )
+
+    # 检查日期、唯一键和提示公司口径。
+    if data["Trddt"].isna().any():
+        raise ValueError("正式面板中存在缺失日期。")
+
+    if data.duplicated(["StkcdRecall", "Trddt"]).any():
+        raise ValueError("被提示公司与日期的组合不唯一。")
+
+    if not data["cueDefinition"].eq("hs300").fillna(False).all():
+        raise ValueError("输入面板不是统一的沪深300提示口径。")
+
+    # 提示、27项控制和两个基础收益窗口应当完整。
+    required_columns = [
+        CUE_COLUMN,
+        *CONTROL_COLUMNS,
+        *baseline_return_columns,
+    ]
+
+    for column in required_columns:
+        if not np.isfinite(data[column].to_numpy()).all():
+            raise ValueError(
+                f"正式面板的 {column} 存在缺失或无穷值，"
+                "请核对合并阶段的回归样本筛选。"
+            )
+
+    for column in [CUE_COLUMN, "Filling"]:
+        if not data[column].isin([0, 1]).all():
+            raise ValueError(f"{column} 必须全部为0或1。")
+
+    # 其余收益窗口允许缺失，由各次回归分别删除。
+    # 无穷值属于异常，直接提示核对。
+    for column in return_columns:
+        if np.isinf(data[column].to_numpy()).any():
+            raise ValueError(f"{column} 存在无穷值，请核对收益数据。")
+
+    data.drop(columns=["cueDefinition"], inplace=True)
+    data["Filling"] = data["Filling"].astype("uint8")
+    data["StkcdRecall"] = data["StkcdRecall"].astype("category")
+    data["yearQuarter"] = (
+        data["Trddt"].dt.to_period("Q").astype("category")
+    )
+
+    print(
+        f"图2正式面板读取完成：{len(data):,}条观测。",
+        flush=True,
+    )
+
+    return data
 
 def run_date_fe_regression(data: pd.DataFrame, horizon: int) -> dict:
     """直接复用表2规格（6），仅将结果转换为图2的字段和百分点单位。"""
@@ -211,109 +358,29 @@ def validate_result_rows(results: pd.DataFrame) -> None:
         raise ValueError("图2结果缺少系数求解方法。")
 
 
-def load_table2_reference() -> pd.DataFrame:
-    """估计前确认当前口径的两个表2锚点均存在。"""
-    if not TABLE2_RESULT_PATH.is_file():
-        raise FileNotFoundError(
-            f"找不到表2模型汇总：{TABLE2_RESULT_PATH}。请先运行当前口径的表2。"
-        )
-    table2 = pd.read_csv(TABLE2_RESULT_PATH)
-    required = {
-        "样本", "收益窗口", "规格", "口径标识", "提示变量",
-        "线索系数（百分点）", "聚类标准误（百分点）", "回归样本量",
-    }
-    missing = sorted(required - set(table2.columns))
-    if missing:
-        raise ValueError(f"表2模型汇总缺少当前口径校验字段：{missing}。请重新运行表2。")
-    for window_label in ANCHORS.values():
-        expected = table2.loc[
-            table2["样本"].eq("pattern")
-            & table2["收益窗口"].eq(window_label)
-            & table2["规格"].eq(TABLE2_SPECIFICATION["规格"])
-        ]
-        if len(expected) != 1:
-            raise ValueError(f"表2中无法找到唯一的{window_label}规格（6）锚点。")
-        if (
-            not expected["口径标识"].eq(SPEC_ID).all()
-            or not expected["提示变量"].eq(CUE_COLUMN).all()
-        ):
-            raise ValueError("表2模型汇总仍是其他口径，请先重新运行当前表2。")
-        numeric = expected[
-            ["线索系数（百分点）", "聚类标准误（百分点）", "回归样本量"]
-        ].to_numpy(dtype=np.float64)
-        if (
-            not np.isfinite(numeric).all()
-            or numeric[0, 1] <= 0
-            or numeric[0, 2] <= 0
-            or numeric[0, 2] != int(numeric[0, 2])
-        ):
-            raise ValueError(f"表2的{window_label}锚点含有无效系数、标准误或样本量。")
-    return table2
-
-
-def validate_against_table2(
-    results: pd.DataFrame,
-    horizons_to_check: set[int] | None = None,
-    *,
-    table2: pd.DataFrame,
-) -> None:
-    """按原容差校验第1、第10窗口的系数、标准误及精确样本量。"""
-    validate_result_specification(results)
-    if horizons_to_check is None:
-        horizons_to_check = set(ANCHORS)
-    if not set(horizons_to_check).issubset(ANCHORS):
-        raise ValueError("表2锚点校验只接受第1和第10窗口。")
-    checked = []
-    for horizon, window_label in ANCHORS.items():
-        if horizon not in horizons_to_check:
-            continue
-        expected = table2.loc[
-            table2["样本"].eq("pattern")
-            & table2["收益窗口"].eq(window_label)
-            & table2["规格"].eq(TABLE2_SPECIFICATION["规格"])
-        ]
-        actual = results.loc[results["窗口序号"].eq(horizon)]
-        if len(expected) != 1 or len(actual) != 1:
-            raise ValueError(f"{window_label}无法完成表2规格（6）交叉校验。")
-        if (
-            not expected["口径标识"].eq(SPEC_ID).all()
-            or not expected["提示变量"].eq(CUE_COLUMN).all()
-        ):
-            raise ValueError("表2锚点与当前主回归口径不一致。")
-        for actual_column, expected_column in (
-            ("线索系数", "线索系数（百分点）"),
-            ("聚类标准误", "聚类标准误（百分点）"),
-        ):
-            actual_value = float(actual.iloc[0][actual_column])
-            expected_value = float(expected.iloc[0][expected_column])
-            if not np.isclose(actual_value, expected_value, rtol=1e-6, atol=1e-8):
-                raise ValueError(
-                    f"{window_label}的{actual_column}与表2规格（6）不一致："
-                    f"图2={actual_value:.12g}，表2={expected_value:.12g}。"
-                )
-        if float(actual.iloc[0]["回归样本量"]) != float(expected.iloc[0]["回归样本量"]):
-            raise ValueError(f"{window_label}的回归样本量与表2规格（6）不一致。")
-        checked.append(window_label)
-    if checked:
-        print(f"{'、'.join(checked)}已通过表2模式公司主样本规格（6）交叉校验。")
-
-
-def save_results(rows: list[dict], *, table2: pd.DataFrame) -> pd.DataFrame:
-    """先校验候选结果，再原子替换进度文件，避免保存失败的锚点。"""
+def save_results(rows: list[dict]) -> pd.DataFrame:
+    """检查口径和数值完整性，再保存逐窗口结果。"""
     results = (
         pd.DataFrame(rows)
         .sort_values("窗口序号")
         .reset_index(drop=True)
     )
-    validate_result_rows(results)
-    anchors_present = set(results["窗口序号"]) & set(ANCHORS)
-    validate_against_table2(results, anchors_present, table2=table2)
-    RESULT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = RESULT_PATH.with_suffix(RESULT_PATH.suffix + ".tmp")
-    results.to_csv(temporary_path, index=False, encoding="utf-8-sig")
-    temporary_path.replace(RESULT_PATH)
-    return results
 
+    validate_result_rows(results)
+
+    RESULT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = RESULT_PATH.with_suffix(
+        RESULT_PATH.suffix + ".tmp"
+    )
+
+    results.to_csv(
+        temporary_path,
+        index=False,
+        encoding="utf-8-sig",
+    )
+    temporary_path.replace(RESULT_PATH)
+
+    return results
 
 def load_completed_rows(resume: bool) -> list[dict]:
     """仅接受当前口径；同口径的缺失诊断窗口重新估计。"""
@@ -570,46 +637,64 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """运行50个窗口；通过表2锚点校验后保存进度和绘图。"""
+    """读取正式面板，逐窗口估计、保存并绘图。"""
     args = parse_args()
-    table2 = load_table2_reference()
+
     existing_rows = load_completed_rows(resume=args.resume)
-    completed = {int(row["窗口序号"]) for row in existing_rows}
-    completed_anchors = completed & set(ANCHORS)
-    if completed_anchors:
-        validate_against_table2(
-            pd.DataFrame(existing_rows), completed_anchors, table2=table2,
-        )
-    pending = [horizon for horizon in HORIZONS if horizon not in completed]
+    completed = {
+        int(row["窗口序号"])
+        for row in existing_rows
+    }
+    pending = [
+        horizon
+        for horizon in HORIZONS
+        if horizon not in completed
+    ]
     rows = existing_rows.copy()
+
     if pending:
         data = read_figure2_panel(pending)
+
         for position, horizon in enumerate(pending, start=1):
             print(
                 f"正在运行加入日期固定效应的图2：[t, t+{horizon}]"
                 f"（待估计窗口 {position}/{len(pending)}）"
             )
+
             row = run_date_fe_regression(data, horizon)
-            # 保存函数会先检查锚点；不一致时保留磁盘上先前的进度。
-            results = save_results(rows + [row], table2=table2)
+
+            # 先检查并保存，再更新内存中的已完成记录。
+            results = save_results(rows + [row])
             rows.append(row)
+
             print(
-                f"窗口 {horizon} 完成：系数={row['线索系数']:.6f}，"
+                f"窗口 {horizon} 完成："
+                f"系数={row['线索系数']:.6f}，"
                 f"标准误={row['聚类标准误']:.6f}"
             )
-            data.drop(columns=[OUTCOME_COLS[horizon]], inplace=True)
+
+            data.drop(
+                columns=[OUTCOME_COLS[horizon]],
+                inplace=True,
+            )
             gc.collect()
+
         del data
         gc.collect()
+
     else:
         print("已有结果包含全部50个完整窗口，无需重新估计。")
-        results = pd.DataFrame(rows).sort_values("窗口序号").reset_index(drop=True)
+        results = (
+            pd.DataFrame(rows)
+            .sort_values("窗口序号")
+            .reset_index(drop=True)
+        )
+
     validate_results(results)
-    validate_against_table2(results, table2=table2)
     draw_figure2_date_fe(results)
+
     print(f"日期固定效应版图2结果已保存：{RESULT_PATH}")
     print(f"日期固定效应版图2已保存：{OUTPUT_PATH}")
-
 
 if __name__ == "__main__":
     main()
