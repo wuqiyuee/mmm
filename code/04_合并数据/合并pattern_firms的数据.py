@@ -12,14 +12,13 @@
 import pandas as pd
 import numpy as np
 import gc
-from dateutil.relativedelta import * 
 from pathlib import Path
-import datetime 
 
 # 根据脚本位置定位项目根目录，整个项目移动后无需修改路径。
 ROOT = Path(__file__).resolve().parents[2]
 
-# 提示公司口径开关：修改下面这一行后，自行运行本脚本。
+# 一、常用研究设置：修改所需设置后，自行运行本脚本。
+# 提示公司口径：
 # "size90"（市值90分位）：公告前第3个交易日总市值严格高于所选月份的90分位断点。
 # "hs300"（历史沪深300）：按当前事件交易日的历史成分资格判断，不叠加市值门槛。
 # "both"（同时输出）：依次生成上述两套结果，每套完成后释放内存。
@@ -28,7 +27,7 @@ CUE_DEFINITION = "hs300"
 # 沪深300模式复用已有历史成分区间文件；也可在 main（主函数）中传入其他路径。
 # 沪深300样本限定在成分文件覆盖期内，当前文件为2005年4月8日至2025年12月31日。
 # 周边日度数据仍用于构造公告控制窗口；市值模式沿用原日期口径。
-# 沪深300模式的输出文件另加“_沪深300”后缀，市值模式沿用原文件名。
+# 沪深300模式先加“_沪深300”后缀；两种口径的最终面板均再加筛样规格后缀。
 # 内部 S90p（原90分位后缀）工作列用于计算所选主口径，沪深300输出时统一改名。
 # 其他规模组仍按真实市值划分，可能与沪深300主组重叠。
 
@@ -36,11 +35,32 @@ CUE_DEFINITION = "hs300"
 # 5：公司×年度季度固定效应。
 # 6：公司×年度季度和日期两组固定效应。
 # (5, 6)表示分别生成并保存两套面板。
+# 此处选择面板的筛样方式，不限制表2后续估计的六个回归规格。
 REGRESSION_SAMPLE_SPECS = (5, 6)
 
-#pd.set_option('display.max_columns', None)
-#pd.set_option('display.width', None)
-#pd.set_option('display.max_colwidth', None)
+# 修改分析师识别方式或回溯天数前，须先准备对应的正式共同覆盖结果；
+# 本脚本不会自动生成该上游文件。
+# 分析师共同覆盖：是否排除、识别方式和回溯自然日数。
+# "split"（按个人识别）；"team"（按团队字符串识别）。
+DROP_ANALYST_OVERLAP = True
+ANALYST_ID_MODE = "split"
+ANALYST_LOOKBACK_DAYS = 365
+
+# 自身公告日："next_if_nontrading"（仅非交易日映射至下一交易日）；
+# "strict_next_trading"（一律映射至公告日之后的首个交易日）。
+EVENT_DATE_MODE = "next_if_nontrading"
+
+# 盈余惊喜聚合分母："nonmissing_sue"（各项盈余惊喜非缺失的提示公司）；
+# "all_cues"（全部合格提示公司）。
+# 盈余惊喜分母和历史价格异动设置作用于相应聚合及扩展变量；
+# 沪深300主提示变量仍按历史成分资格和规定的关系筛选条件构造。
+SUE_DENOMINATOR_MODE = "nonmissing_sue"
+
+# 市值断点月份："prev_month"（事件交易日的上月）；"same_month"（当月）。
+MARKETCAP_BREAKPOINT_MODE = "prev_month"
+
+# 历史价格异动："any"（任意一家）；"both"（两家公司同时进入价格异动组）。
+TOP_MOVER_MODE = "any"
 
 
 #===============================================================================
@@ -3647,20 +3667,20 @@ def save_pattern_final_sample(daily_panel, output_path):
 def main(
     root=str(ROOT),
     *,
-    sue_denominator_mode="nonmissing_sue",
-    drop_analyst_overlap=True,
-    analyst_id_mode="split",
-    analyst_lookback_days=365,
-    marketcap_breakpoint_mode="prev_month",
-    event_date_mode="next_if_nontrading",
-    top_mover_mode="any",
+    sue_denominator_mode=SUE_DENOMINATOR_MODE,
+    drop_analyst_overlap=DROP_ANALYST_OVERLAP,
+    analyst_id_mode=ANALYST_ID_MODE,
+    analyst_lookback_days=ANALYST_LOOKBACK_DAYS,
+    marketcap_breakpoint_mode=MARKETCAP_BREAKPOINT_MODE,
+    event_date_mode=EVENT_DATE_MODE,
+    top_mover_mode=TOP_MOVER_MODE,
     cue_definition=CUE_DEFINITION,
     hs300_membership_path=None,
 ):
-    """按顶部提示口径开关输出一种或两种面板，并按所选回归规格筛样。
+    """按顶部设置构造提示口径，并为每个所选筛样规格分别保存最终面板。
 
-    单口径返回面板及统计结果；双口径仅返回两张最终面板的保存路径，
-    每套完成后释放其大表，避免同时将两套面板保留在内存中。
+    单口径返回各筛样规格的保存路径及变量说明；双口径返回按提示口径、
+    筛样规格分组的保存路径。每套保存后释放大表，不在返回值中保留面板。
     """
 
     if cue_definition not in {"size90", "hs300", "both"}:
@@ -3716,7 +3736,13 @@ def main(
     )
     cue_labels = {"size90": "市值严格高于第90分位", "hs300": "历史沪深300"}
     print("本次主提示公司口径：", cue_labels[config["CUE_DEFINITION"]])
-    print("本次最终面板路径：", paths["output_path"])
+    print("本次合并阶段筛样规格：", REGRESSION_SAMPLE_SPECS)
+    base_output_path = paths["output_path"]
+    for sample_spec in REGRESSION_SAMPLE_SPECS:
+        planned_output_path = base_output_path.with_name(
+            f"{base_output_path.stem}_筛样规格{sample_spec}{base_output_path.suffix}"
+        )
+        print(f"筛样规格（{sample_spec}）最终面板路径：{planned_output_path}")
 
     # 分析师共同覆盖文件所在目录。
     analyst_overlap_root = (

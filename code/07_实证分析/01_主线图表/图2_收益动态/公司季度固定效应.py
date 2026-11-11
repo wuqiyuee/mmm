@@ -186,7 +186,9 @@ def save_progress(rows, path, signature):
     table = table.sort_values("window")
     table["signature"] = signature
 
-    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    temporary_dir = ROOT / "work" / "图2结果暂存"
+    temporary_dir.mkdir(parents=True, exist_ok=True)
+    temporary_path = temporary_dir / (path.name + ".tmp")
     table.to_csv(
         temporary_path,
         index=False,
@@ -474,8 +476,8 @@ def run_figure2() -> list[Path]:
             *rhs_columns,
         ]
 
-        # 共同变量已经通过完整性检查，
-        # 当前窗口仅删除自身累计收益缺失的观测。
+        # 每个收益窗口都从原面板独立选取样本。
+        # 其他必要变量已在读取时核验，这里删除本窗口收益缺失。
         reg = data.loc[
             data[outcome].notna(),
             regression_columns,
@@ -485,6 +487,21 @@ def run_figure2() -> list[Path]:
             raise ValueError(
                 f"窗口[t,t+{horizon}]没有可用回归观测。"
             )
+
+        # 在当前窗口的有效样本内，检查公司×年度季度单例。
+        group_sizes = reg.groupby(
+            ["StkcdRecall", "yearQuarter"],
+            observed=True,
+            sort=False,
+        )[outcome].transform("size")
+
+        reg = reg.loc[group_sizes.gt(1)].copy()
+
+        if reg.empty:
+            raise ValueError(
+                f"窗口[t,t+{horizon}]删除公司季度单例后没有剩余观测。"
+            )
+
 
         # 公司与年度季度的交互固定效应。
         reg["firm_yearquarter_fe"] = pd.Categorical(

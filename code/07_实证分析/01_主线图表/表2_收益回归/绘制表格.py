@@ -35,7 +35,20 @@ from 回归表格绘制 import (
     draw_table2_full_two_pages,
     read_result,
 )
-from 主回归口径 import CUE_COLUMN, SPEC_ID
+# 选择需要绘制的回归结果，其筛样规格应与估计脚本一致。
+INPUT_SAMPLE_SPEC = 5
+
+if INPUT_SAMPLE_SPEC not in (5, 6):
+    raise ValueError("输入结果的筛样规格只能选择5或6。")
+
+CUE_COLUMN = "quarterLag1HS300"
+
+SPEC_ID = (
+    "沪深300_个人365天_数行者分段_允许填充_全期"
+    f"_筛样规格{INPUT_SAMPLE_SPEC}"
+)
+
+OUTPUT_TAG = f"沪深300_筛样规格{INPUT_SAMPLE_SPEC}"
 
 
 OUTPUT_DIR = PROJECT_ROOT / "图表结果" / "01_主线图表" / "表2_收益回归"
@@ -83,28 +96,52 @@ def validate_current_results(summary, details) -> None:
 
 
 def main(result_dir: Path | None = None) -> list[Path]:
-    """从本任务或显式指定目录读取表2数值结果，返回全部生成文件路径。"""
-    input_dir = Path(result_dir) if result_dir is not None else OUTPUT_DIR
+    """读取选定筛样规格的结果，绘制并保存表2。"""
+    input_dir = (
+        Path(result_dir)
+        if result_dir is not None
+        else OUTPUT_DIR
+    )
+
     summary = read_result(
-        input_dir / "表2_模型汇总.csv",
+        input_dir / f"表2_模型汇总_{OUTPUT_TAG}.csv",
         [
-            "样本", "样本说明", "收益窗口", "规格", "线索系数（百分点）",
-            "聚类标准误（百分点）", "p值", "回归样本量", "R方",
+            "样本", "样本说明", "收益窗口", "规格",
+            "线索系数（百分点）", "聚类标准误（百分点）",
+            "p值", "回归样本量", "R方",
         ],
     )
+
     details = read_result(
-        input_dir / "表2_系数明细.csv",
+        input_dir / f"表2_系数明细_{OUTPUT_TAG}.csv",
         [
             "样本", "收益窗口", "规格", "变量", "变量顺序",
             "系数（百分点）", "聚类标准误（百分点）", "p值",
         ],
     )
+
+    # 检查口径标识、提示变量及十二个模型的完整性。
     validate_current_results(summary, details)
-    compact = OUTPUT_DIR / "table2_收益回归_紧凑版.png"
-    pattern_first = OUTPUT_DIR / "table2_收益回归_完整系数版_模式公司主样本.png"
-    pattern_second = OUTPUT_DIR / "table2_收益回归_完整系数版_模式公司主样本_续页.png"
-    pattern_pdf = OUTPUT_DIR / "table2_收益回归_完整系数版_模式公司主样本.pdf"
-    draw_table2_compact(summary, compact, notes=TABLE2_NOTES)
+
+    compact = OUTPUT_DIR / (
+        f"table2_收益回归_紧凑版_{OUTPUT_TAG}.png"
+    )
+    pattern_first = OUTPUT_DIR / (
+        f"table2_收益回归_完整系数版_模式公司主样本_{OUTPUT_TAG}.png"
+    )
+    pattern_second = OUTPUT_DIR / (
+        f"table2_收益回归_完整系数版_模式公司主样本_续页_{OUTPUT_TAG}.png"
+    )
+    pattern_pdf = OUTPUT_DIR / (
+        f"table2_收益回归_完整系数版_模式公司主样本_{OUTPUT_TAG}.pdf"
+    )
+
+    draw_table2_compact(
+        summary,
+        compact,
+        notes=TABLE2_NOTES,
+    )
+
     draw_table2_full_two_pages(
         summary,
         details,
@@ -114,10 +151,18 @@ def main(result_dir: Path | None = None) -> list[Path]:
         pdf_output=pattern_pdf,
         notes=TABLE2_NOTES,
     )
-    outputs = [compact, pattern_first, pattern_second, pattern_pdf]
+
+    outputs = [
+        compact,
+        pattern_first,
+        pattern_second,
+        pattern_pdf,
+    ]
+
     print("表2绘制完成：")
     for output in outputs:
         print(f"- {output}")
+
     return outputs
 
 

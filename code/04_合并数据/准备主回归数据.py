@@ -1,8 +1,9 @@
-"""核对正式沪深300最终面板，并整理为表2、图2共用的季度文件。
+"""为尚未迁移的扩展分析核对旧正式面板并整理季度文件。
 
-先自行运行同目录下“合并pattern_firms的数据.py”，再运行本文件。
-样本、提示、填充日起点、公告、新闻、收益及缩尾都由合并脚本统一构造。
-本文件只读该脚本的沪深300最终面板及口径清单，不构造研究变量，
+当前表2和两个图2直接读取带筛样规格后缀的正式合并面板，无需运行本文件。
+本文件仍要求旧的无筛样规格后缀面板及对应口径清单；当前合并脚本不再生成它们。
+使用前须先核对旧扩展的数据来源和筛样，不可直接把新面板改名后传入。
+本文件只读旧正式面板及清单，不构造研究变量，
 不读取其他上游数据或旧市值面板，也不执行其他项目脚本。
 同名季度观测与50窗收益按相同行位置配对；不覆盖非空目标目录。
 """
@@ -71,10 +72,13 @@ def iter_source_blocks():
 
 
 def main():
-    # 一、只接受统一合并入口生成、带有本次文件属性的沪深300正式面板。
-    generator = PROJECT_ROOT / "code/04_合并数据/合并pattern_firms的数据.py"
+    # 一、核对旧扩展要求的正式面板及口径清单；本轮不迁移输入来源。
     if not SOURCE_PANEL_PATH.is_file() or not SOURCE_MANIFEST_PATH.is_file():
-        raise FileNotFoundError(f"缺少新版沪深300正式面板或口径清单，请先自行运行：{generator}")
+        raise FileNotFoundError(
+            f"旧扩展入口缺少面板或口径清单：{SOURCE_PANEL_PATH}；{SOURCE_MANIFEST_PATH}"
+            "\n当前合并脚本不再生成这套旧输入，请先核对扩展分析的数据来源。"
+            "当前表2和两个图2无需运行本文件。"
+        )
     source_info = json.loads(SOURCE_MANIFEST_PATH.read_text(encoding="utf-8"))
     expected = {
         "panel_format": 1, "cue_definition": "hs300", "news_source": NEWS_SOURCE,
