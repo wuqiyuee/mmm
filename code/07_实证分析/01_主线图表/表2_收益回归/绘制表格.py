@@ -41,19 +41,19 @@ INPUT_SAMPLE_SPEC = 5
 if INPUT_SAMPLE_SPEC not in (5, 6):
     raise ValueError("输入结果的筛样规格只能选择5或6。")
 
-CUE_COLUMN = "quarterLag1HS300"
+CUE_COLUMN = "quarterLag1size90plus"
 
 SPEC_ID = (
-    "沪深300_个人365天_数行者分段_允许填充_全期"
+    "市值90分位_个人365天_数行者分段_允许填充_全期"
     f"_筛样规格{INPUT_SAMPLE_SPEC}"
 )
 
-OUTPUT_TAG = f"沪深300_筛样规格{INPUT_SAMPLE_SPEC}"
+OUTPUT_TAG = f"市值90分位_筛样规格{INPUT_SAMPLE_SPEC}"
 
 
 OUTPUT_DIR = PROJECT_ROOT / "图表结果" / "01_主线图表" / "表2_收益回归"
 TABLE2_NOTES = [
-    "注：历史沪深300提示；剔除前365天个人分析师共同覆盖关系，保留提示方金融和房地产公司。",
+    "注：历史市值90分位提示；剔除前365天个人分析师共同覆盖关系，保留提示方金融和房地产公司。",
     "新闻：数行者2005—2009年报刊、2010—2025年网络；允许合格填充日起点，保留全期年份。",
     "主规格为（6）：27项控制、公司×年度季度和日期固定效应；括号内为公司与日期双向聚类标准误。",
     "R²采用原回归库总体口径；空白表示未纳入、被吸收或聚类方差非正，详见系数明细。",

@@ -3,7 +3,7 @@
 输入第一阶段的公司对明细，输出被提示公司×事件交易日的提示事件和合格公司对。
 市值90分位、沪深300、行业前4名和行业前5名使用相同聚合、盈余惊喜分母和机制算法。
 所需计算实现均在本文件；仅导入标准库和数据处理库，不加载任何项目脚本。
-行业排名只读取正式目录中已完成的缓存，并校验既有来源、版本和参数。
+行业口径只读取正式日度资格面板，核对完成摘要后匹配资格、市值和事件日行业。
 内部主提示字段保留历史名称，实际口径由cueDefinition（提示口径）记录。
 直接执行时才读取数据与写出结果；导入本文件不会启动计算。
 """
@@ -22,44 +22,8 @@ SUE_DENOMINATOR_MODE = "nonmissing_sue"
 TOP_MOVER_MODE = "any"
 START_YEAR = 2005
 END_YEAR = 2025
-RANK_CACHE_DIR_NAME = "中间结果/04_合并数据/行业排名提示检验/排名缓存"
 STAGE_ROOT_NAME = "三阶段合并"
 INPUT_NAME = "候选公司对基础表.csv"
-VERSION = "industry_rank_v7_verified_g55_exception"
-
-
-# 已核对的行业人工修正；与正式排名缓存的参数必须一致。
-INDUSTRY_OVERRIDES = [
-    {
-        "Stkcd": "000780",
-        "start": "2002-03-06",
-        "end": "2007-04-25",
-        "industryGroup": "C01",
-        "onlyIfIndustryCode": "C0",
-        "source": "https://static.cninfo.com.cn/finalpage/2002-03-06/550159.html",
-        "note": (
-            "草原兴发2001年报在2002年3月6日公开，主营为肉羊、肉鸡产品生产加工销售；"
-            "据主营及旧版分类定义人工推定为C01食品加工业，非报告直接列明的代码。"
-            "仅细化原C0，截止2007年4月26日资产交割前一天，不延用至煤炭业务期间。"
-            "交割日期核对：https://static.cninfo.com.cn/finalpage/2007-08-17/30838419.PDF"
-        ),
-    },
-    {
-        "Stkcd": "000809",
-        "start": "2010-11-15",
-        "end": "2010-11-15",
-        "industryGroup": "C81",
-        "onlyIfIndustryCode": "C8",
-        "source": "https://epaper.cs.com.cn/zgzqb/images/2010-11/15/B004/ZQBXP0041115C.pdf",
-        "note": (
-            "中汇医药2010年11月15日公告明确当日启用医药、生物制品分类；"
-            "锐思2001版行业记录将C81生效日记为次日。"
-            "2009年报明确主营为中药材及中成药加工业，对应旧版C8110，归并为C81。"
-            "年报：https://static.cninfo.com.cn/finalpage/2010-03-24/57721726.PDF"
-            "仅修正当天C8记录，不提前其他公司或其他日期的锐思生效日。"
-        ),
-    },
-]
 
 
 def find_root() -> Path:
@@ -386,13 +350,19 @@ def add_size_groups_and_basic_cues(mm, cue_definition="size90"):
 
     if cue_definition == "size90":
         mm["mainCueEligible"] = mm["size90plus"]
+
+    elif cue_definition == "size95":
+        mm["mainCueEligible"] = (
+            mm["mktcap_tm3"] > mm["marketCap_95th_percentile"]
+        ).astype("int8")
+
     elif cue_definition == "hs300":
         if "isHS300" not in mm.columns:
-            raise ValueError("尚未匹配历史沪深300成分资格，不能构造沪深300提示。")
+            raise ValueError("尚未匹配历史沪深300成分资格。")
         mm["mainCueEligible"] = mm["isHS300"]
-    else:
-        raise ValueError("提示公司口径只能是 size90（市值90分位）或 hs300（沪深300）。")
 
+    else:
+        raise ValueError("主提示资格只能选择市值90分位、市值95分位或沪深300。")
     mm["size50_90"] = (
         (mm["mktcap_tm3"] > mm["marketCap_50th_percentile"])
         & (mm["mktcap_tm3"] <= mm["marketCap_90th_percentile"])
@@ -939,139 +909,6 @@ def collapse_pattern_cues(mm, denominator_mode):
     return collapsed
 
 
-def _source_paths(root):
-    """只校验既有排名缓存的来源元数据，不加载或执行来源脚本。"""
-    return {
-        "calendar": root / "中间结果/01_清洗后样本/市场交易日历_td.csv",
-        "industry": root / "中间结果/02_变量构造结果/同行业识别/个股行业代码完整面板.csv",
-        "daily": root / "中间结果/00_合并原始数据/CSMAR_日个股回报率(升级测试)_1995_2026.csv",
-        "company": root / "input/CSMAR/公司文件(1990-12-10至2026-08-21)/TRD_Co.csv",
-        "resset": root / "input/RESSET/RESSET 股票_行业变更历史/RESSET_INDHIS_1.csv",
-        "matrix": root / "中间结果/03_记忆矩阵/MemoryMatrixPattern(交易变量用公告后首个交易日).csv",
-        "module": root / "code/07_实证分析/05_行业排名提示检验/公共模块/行业排名.py",
-    }
-
-
-def _source_state(paths):
-    state = {}
-    for name, path in paths.items():
-        if not path.is_file():
-            raise FileNotFoundError(f"行业排名所需文件不存在：{path}")
-        stat = path.stat()
-        state[name] = {
-            "path": str(path.resolve()), "size": stat.st_size,
-            "mtime_ns": stat.st_mtime_ns,
-        }
-    return state
-
-
-def _stock_codes(values):
-    codes = values.astype("string").str.strip()
-    codes = codes.str.replace(r"\.0+$", "", regex=True)
-    valid = codes.str.fullmatch(r"[0-9]{1,6}", na=False)
-    return codes.where(valid).str.zfill(6)
-
-
-def _prepare_overrides(overrides):
-    """接受字典列表，或每行依次为代码、起始日、终止日、行业大类的列表。"""
-    result = []
-    for row in overrides or []:
-        if isinstance(row, dict):
-            values = [row.get(k) for k in ["Stkcd", "start", "end", "industryGroup"]]
-        else:
-            values = list(row)
-        if len(values) != 4:
-            raise ValueError("行业人工修正每行必须包含 Stkcd、start、end、industryGroup。")
-        code = _stock_codes(pd.Series([values[0]])).iloc[0]
-        start = pd.to_datetime(values[1], errors="coerce")
-        end = pd.to_datetime(values[2], errors="coerce")
-        group = str(values[3]).strip().upper()
-        if pd.isna(code) or pd.isna(start) or pd.isna(end) or start > end:
-            raise ValueError(f"行业人工修正的公司或日期区间无效：{values}")
-        valid_group = pd.Series([group]).str.fullmatch(r"[A-Z][0-9]{2}|M").iloc[0]
-        if not valid_group or (group == "M" and end >= pd.Timestamp("2012-10-26")):
-            raise ValueError(f"人工修正必须明确到行业大类，M 仅适用于旧版：{values}")
-        item = {
-            "Stkcd": str(code), "start": start.strftime("%Y-%m-%d"),
-            "end": end.strftime("%Y-%m-%d"), "industryGroup": group,
-        }
-        if isinstance(row, dict):
-            original_code = row.get("onlyIfIndustryCode")
-            if original_code is not None:
-                original_code = str(original_code).strip().upper()
-                if not original_code:
-                    raise ValueError("人工修正限定的原行业代码不能为空。")
-                item["onlyIfIndustryCode"] = original_code
-            for field in ["source", "note"]:
-                if row.get(field) is not None:
-                    item[field] = str(row[field])
-        for previous in result:
-            overlap = (previous["Stkcd"] == item["Stkcd"]
-                       and previous["start"] <= item["end"]
-                       and item["start"] <= previous["end"])
-            same_scope = (
-                previous.get("onlyIfIndustryCode") is None
-                or item.get("onlyIfIndustryCode") is None
-                or previous["onlyIfIndustryCode"] == item["onlyIfIndustryCode"]
-            )
-            if overlap and same_scope and previous["industryGroup"] != item["industryGroup"]:
-                raise ValueError(f"同一公司存在互相冲突的行业人工修正：{previous}；{item}")
-        result.append(item)
-    return sorted(result, key=lambda x: (x["Stkcd"], x["start"], x["end"], x["industryGroup"]))
-
-
-def _cache_setup(root, cache_dir, start_year, end_year, overrides):
-    root = Path(root).resolve()
-    cache_dir = Path(cache_dir).resolve()
-    if not cache_dir.is_relative_to(root / "中间结果"):
-        raise ValueError("行业排名的正式缓存目录必须位于当前项目中间结果内。")
-    start_year, end_year = int(start_year), int(end_year)
-    if start_year > end_year:
-        raise ValueError("排名起始年份不能晚于结束年份。")
-    params = {
-        "start_year": start_year, "end_year": end_year,
-        "overrides": _prepare_overrides(overrides),
-    }
-    result = {
-        "rank_dir": cache_dir / "行业排名_逐年",
-        "industry_dir": cache_dir / "行业归并_逐年",
-        "audit_path": cache_dir / "行业排名_核对清单.csv",
-        "manifest_path": cache_dir / "行业排名_缓存清单.json",
-        "start_year": start_year, "end_year": end_year,
-    }
-    return root, cache_dir, params, result
-
-
-def load_rank_cache(root, cache_dir, start_year, end_year, overrides=None):
-    """只读验证完成标记、来源文件、口径参数及逐年结果，返回缓存路径。"""
-    root, _, params, result = _cache_setup(root, cache_dir, start_year, end_year, overrides)
-    path = result["manifest_path"]
-    if not path.is_file():
-        raise FileNotFoundError(f"没有完整的行业排名缓存，请先执行构造排名步骤：{path}")
-    manifest = json.loads(path.read_text(encoding="utf-8"))
-    if manifest.get("complete") is not True or manifest.get("version") != VERSION:
-        raise ValueError("行业排名缓存未完成，或算法版本已经变化，请重新构造。")
-    if manifest.get("parameters") != params:
-        raise ValueError("行业排名缓存的年份或人工修正与当前参数不同，请重新构造。")
-    if manifest.get("sources") != _source_state(_source_paths(root)):
-        raise ValueError("行业排名的来源文件或模块发生变化，请重新构造缓存。")
-    coverage = manifest.get("coverage", {})
-    if not all(key in coverage for key in ["begin", "finish", "first_event_date", "first_event_td", "first_rank_td"]):
-        raise ValueError("行业排名缓存缺少实际事件缓冲范围，请重新构造。")
-    expected = []
-    for year in range(params["start_year"] - 1, params["end_year"] + 1):
-        expected.extend([result["rank_dir"] / f"{year}.parquet", result["industry_dir"] / f"{year}.parquet"])
-    outputs = manifest.get("outputs", {})
-    for output in expected:
-        if not output.is_file():
-            raise FileNotFoundError(f"行业排名缓存缺少年份文件：{output}")
-        stat = output.stat()
-        if outputs.get(str(output)) != {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}:
-            raise ValueError(f"行业排名缓存文件与完成清单不符，请重新构造：{output}")
-    result["coverage"] = coverage
-    return result
-
-
 def stop_with_audit(data, audit_dir, filename, message):
     """只在新任务目录保存需要核对的记录，不把未知值补成0。"""
     path = Path(audit_dir) / filename
@@ -1080,27 +917,138 @@ def stop_with_audit(data, audit_dir, filename, message):
     raise ValueError(f"{message}。核对清单：{path}")
 
 
-def read_cache_rows(keys, cache_dir, columns):
-    """按已知交易日期逐年读取缓存，只保留本次需要的公司日。"""
+def load_industry_daily_panel(root, wanted, chunk_size=250_000):
+    """一次分块核对正式资格面板，仅保留本次需要的公司日；不重算排名。"""
+    folder = Path(root) / "中间结果/02_变量构造结果/行业提示资格"
+    panel_path = folder / "行业前4前5_日度资格面板.csv"
+    summary_path = folder / "日度资格面板_构造摘要.json"
+    if not panel_path.is_file() or not summary_path.is_file():
+        raise FileNotFoundError(f"缺少行业日度资格面板或完成摘要：{folder}")
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    if summary.get("complete") is not True or summary.get("version") != "industry_daily_eligibility_v1":
+        raise ValueError("行业日度资格面板未完成或版本不符，请先运行资格准备脚本。")
+    columns = [
+        "Stkcd", "td", "Trddt", "size", "sizew", "IndustryCode", "industryGroup",
+        "industryStatus", "industrySourceStandard", "industryRank", "industryRankMax",
+        "industryN", "rankingEligible", "isIndTop4", "isIndTop5",
+    ]
+    header = pd.read_csv(panel_path, nrows=0, encoding="utf-8-sig").columns.tolist()
+    if header != columns or summary.get("columns") != columns:
+        raise ValueError("行业日度资格面板的字段或排列顺序与完成摘要不一致。")
+    if summary.get("key_order") != ["td", "Stkcd"]:
+        raise ValueError("行业日度资格面板必须按交易日序号、股票代码升序保存。")
+    if type(summary.get("rows")) is not int or summary["rows"] <= 0:
+        raise ValueError("行业日度资格面板摘要的行数缺失或无效。")
+    panel_stat = panel_path.stat()
+    file_state = {"size": panel_stat.st_size, "mtime_ns": panel_stat.st_mtime_ns}
+    if summary.get("panel_file") != file_state:
+        raise ValueError("行业日度资格面板与完成摘要不属于同一次完整输出。")
+    begin = pd.to_datetime(summary.get("begin"), errors="coerce")
+    finish = pd.to_datetime(summary.get("finish"), errors="coerce")
+    if pd.isna(begin) or pd.isna(finish) or begin > finish:
+        raise ValueError("行业日度资格面板摘要缺少有效覆盖日期。")
+    wanted = wanted[["Stkcd", "td", "Trddt"]].drop_duplicates().copy()
+    wanted["Stkcd"] = wanted["Stkcd"].astype("string")
+    wanted["td"] = pd.to_numeric(wanted["td"], errors="raise")
+    wanted["Trddt"] = pd.to_datetime(wanted["Trddt"], errors="raise")
+    invalid = (
+        ~wanted["Stkcd"].str.fullmatch(r"[0-9]{6}", na=False)
+        | wanted["td"].isna() | ~np.isfinite(wanted["td"]) | wanted["td"].mod(1).ne(0)
+        | wanted["Trddt"].isna()
+    )
+    if invalid.any() or wanted.duplicated(["Stkcd", "td"]).any():
+        raise ValueError("待匹配的行业资格公司日键无效，或同一序号对应多个日期。")
+    if not wanted["Trddt"].between(begin, finish).all():
+        raise ValueError("行业资格面板覆盖期不足，不能判断所需事件日或事件前第3交易日资格。")
+    wanted["td"] = wanted["td"].astype("int64")
+    string_columns = ["Stkcd", "IndustryCode", "industryGroup", "industryStatus", "industrySourceStandard"]
+    numeric_columns = ["td", "size", "sizew", "industryRank", "industryRankMax", "industryN", "rankingEligible", "isIndTop4", "isIndTop5"]
+    parts = []
+    row_count = 0
+    previous_key = None
+    previous_date = None
+    for chunk in pd.read_csv(
+        panel_path, dtype={column: "string" for column in string_columns},
+        encoding="utf-8-sig", chunksize=chunk_size,
+    ):
+        if chunk.empty:
+            continue
+        row_count += len(chunk)
+        chunk["Trddt"] = pd.to_datetime(chunk["Trddt"], errors="raise")
+        for column in numeric_columns:
+            chunk[column] = pd.to_numeric(chunk[column], errors="raise")
+            if column not in {"size", "sizew"} and (~np.isfinite(chunk[column].dropna())).any():
+                raise ValueError(f"行业日度资格面板的{column}（数值字段）包含无穷值。")
+        invalid_key = (
+            ~chunk["Stkcd"].str.fullmatch(r"[0-9]{6}", na=False)
+            | chunk["td"].isna() | chunk["td"].mod(1).ne(0)
+            | chunk["Trddt"].isna() | ~chunk["Trddt"].between(begin, finish)
+        )
+        if invalid_key.any():
+            raise ValueError("行业日度资格面板含无效键或覆盖期以外的日期。")
+        chunk["td"] = chunk["td"].astype("int64")
+        same_td = chunk["td"].eq(chunk["td"].shift())
+        unordered = chunk["td"].lt(chunk["td"].shift()) | (same_td & chunk["Stkcd"].le(chunk["Stkcd"].shift()))
+        first_key = (int(chunk["td"].iloc[0]), str(chunk["Stkcd"].iloc[0]))
+        if unordered.any() or (previous_key is not None and first_key <= previous_key):
+            raise ValueError("行业日度资格面板未按公司日键严格升序保存，或存在重复键。")
+        dates = chunk[["td", "Trddt"]].drop_duplicates()
+        if dates["td"].duplicated().any() or (previous_key is not None and first_key[0] == previous_key[0] and chunk["Trddt"].iloc[0] != previous_date):
+            raise ValueError("行业日度资格面板的同一交易日序号对应多个日期。")
+        previous_key = (int(chunk["td"].iloc[-1]), str(chunk["Stkcd"].iloc[-1]))
+        previous_date = chunk["Trddt"].iloc[-1]
+        for column in ["rankingEligible", "isIndTop4", "isIndTop5"]:
+            if (chunk[column].notna() & ~chunk[column].isin([0, 1])).any():
+                raise ValueError(f"行业日度资格面板的{column}（资格标记）不是0、1或缺失。")
+        rank = chunk["industryRank"]
+        rank_max = chunk["industryRankMax"]
+        invalid_rank = rank.isna().ne(rank_max.isna()) | (rank.notna() & (rank.lt(1) | rank.mod(1).ne(0) | rank_max.mod(1).ne(0) | rank_max.lt(rank)))
+        invalid_rank |= chunk["industryN"].notna() & (chunk["industryN"].lt(1) | chunk["industryN"].mod(1).ne(0))
+        if invalid_rank.any():
+            raise ValueError("行业日度资格面板的排名上下界无效。")
+        eligible = chunk["rankingEligible"].eq(1)
+        if (eligible & (chunk["size"].isna() | ~np.isfinite(chunk["size"]) | chunk["size"].le(0))).any():
+            raise ValueError("行业排名基础资格为1的公司日缺少有效总市值。")
+        for top_n in (4, 5):
+            column = f"isIndTop{top_n}"
+            expected = pd.Series(pd.NA, index=chunk.index, dtype="Int8")
+            expected.loc[chunk["rankingEligible"].eq(0)] = 0
+            expected.loc[eligible & rank_max.le(top_n)] = 1
+            expected.loc[eligible & rank.gt(top_n)] = 0
+            mismatch = chunk[column].isna().ne(expected.isna()) | (chunk[column].notna() & chunk[column].ne(expected).fillna(False))
+            if mismatch.any():
+                raise ValueError(f"行业日度资格面板的前{top_n}资格与排名上下界不一致。")
+        matched = chunk.merge(wanted, on=["Stkcd", "td", "Trddt"], how="inner", validate="1:1")
+        if not matched.empty:
+            parts.append(matched)
+    if row_count != summary["rows"]:
+        raise ValueError("行业日度资格面板实际行数与完成摘要不一致。")
+    current_stat = panel_path.stat()
+    if {"size": current_stat.st_size, "mtime_ns": current_stat.st_mtime_ns} != file_state:
+        raise ValueError("读取期间行业日度资格面板发生变化，请重新运行。")
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=columns)
+
+
+def load_industry_daily_for_candidates(root, candidates, calendar):
+    """将排名日及事件日双方的键合并后，只扫描一次正式资格文件。"""
+    rank_keys = candidates[["Stkcd", "event_td"]].drop_duplicates().rename(columns={"event_td": "td"})
+    rank_keys["td"] = rank_keys["td"] - 3
+    rank_keys = rank_keys.merge(calendar, on="td", how="left", validate="m:1")
+    cue_keys = candidates[["Stkcd", "event_td", "event_Trddt"]].rename(columns={"event_td": "td", "event_Trddt": "Trddt"})
+    recall_keys = candidates[["StkcdRecall", "event_td", "event_Trddt"]].rename(columns={"StkcdRecall": "Stkcd", "event_td": "td", "event_Trddt": "Trddt"})
+    wanted = pd.concat([rank_keys, cue_keys, recall_keys], ignore_index=True).drop_duplicates()
+    return load_industry_daily_panel(root, wanted)
+
+
+def match_industry_daily_rows(keys, daily, columns):
+    """从已读取的正式资格行中按公司、交易序号和日期匹配。"""
     keys = keys[["Stkcd", "td", "Trddt"]].drop_duplicates()
     if keys.duplicated(["Stkcd", "td"]).any():
         raise ValueError("待匹配公司日对应多个交易日期。")
-    parts = []
-    for year, needed in keys.groupby(keys["Trddt"].dt.year):
-        path = Path(cache_dir) / f"{int(year)}.parquet"
-        if not path.is_file():
-            raise FileNotFoundError(f"缺少已完成的年度缓存：{path}")
-        data = pd.read_parquet(path, columns=columns)
-        data["Stkcd"] = data["Stkcd"].astype("string").str.zfill(6)
-        if data.duplicated(["Stkcd", "td"]).any():
-            raise ValueError(f"年度缓存公司日键重复：{path}")
-        matched = needed.merge(data, on=["Stkcd", "td", "Trddt"], how="left", validate="1:1", indicator=True)
-        parts.append(matched)
-        del data
-    return pd.concat(parts, ignore_index=True)
+    return keys.merge(daily[columns], on=["Stkcd", "td", "Trddt"], how="left", validate="1:1", indicator=True)
 
 
-def merge_rank_information(mm, calendar, rank_cache, audit_dir):
+def merge_rank_information(mm, calendar, industry_daily, audit_dir):
     """事件前第3个交易日排名与权重来自含金融公司的同一数据源。"""
     event_dates = mm[["event_td", "event_Trddt"]].drop_duplicates()
     checked = event_dates.merge(
@@ -1115,9 +1063,9 @@ def merge_rank_information(mm, calendar, rank_cache, audit_dir):
     wanted = wanted.merge(calendar, on="td", how="left", validate="m:1")
     if wanted["Trddt"].isna().any():
         stop_with_audit(wanted.loc[wanted["Trddt"].isna()], audit_dir, "排名日期缺少交易日历.csv", "排名日不在统一交易日历中")
-    ranked = read_cache_rows(
-        wanted, rank_cache["rank_dir"],
-        ["Stkcd", "td", "Trddt", "size", "sizew", "IndustryCode", "industryGroup", "industryStatus", "industrySourceStandard", "industryRank", "industryRankMax", "industryN", "rankingEligible"],
+    ranked = match_industry_daily_rows(
+        wanted, industry_daily,
+        ["Stkcd", "td", "Trddt", "size", "sizew", "IndustryCode", "industryGroup", "industryStatus", "industrySourceStandard", "industryRank", "industryRankMax", "industryN", "rankingEligible", "isIndTop4", "isIndTop5"],
     )
     missing = ranked["_merge"].ne("both")
     unknown = ~ranked["rankingEligible"].isin([0, 1])
@@ -1150,13 +1098,13 @@ def merge_rank_information(mm, calendar, rank_cache, audit_dir):
     return mm
 
 
-def filter_event_industries(mm, rank_cache, audit_dir):
+def filter_event_industries(mm, industry_daily, audit_dir):
     """事件日可确定同业时排除，可确定异业时保留，关系不明时核对。"""
     cue_keys = mm[["Stkcd", "event_td", "event_Trddt"]].rename(columns={"event_td": "td", "event_Trddt": "Trddt"})
     recall_keys = mm[["StkcdRecall", "event_td", "event_Trddt"]].rename(columns={"StkcdRecall": "Stkcd", "event_td": "td", "event_Trddt": "Trddt"})
     wanted = pd.concat([cue_keys, recall_keys], ignore_index=True).drop_duplicates()
-    industry = read_cache_rows(
-        wanted, rank_cache["industry_dir"],
+    industry = match_industry_daily_rows(
+        wanted, industry_daily,
         ["Stkcd", "td", "Trddt", "IndustryCode", "industryGroup", "industryStatus", "industrySourceStandard"],
     )
     valid = industry["industryStatus"].eq("valid") & industry["industryGroup"].notna()
@@ -1194,6 +1142,7 @@ def check_cue_rank_bounds(mm, top_ns, audit_dir):
     unknown = mm["industryRank"].isna() | mm["industryRankMax"].isna()
     for top_n in top_ns:
         unknown |= mm["industryRank"].le(top_n) & mm["industryRankMax"].gt(top_n)
+        unknown |= ~mm[f"isIndTop{top_n}"].isin([0, 1])
     unknown = eligible & unknown.fillna(True)
     if unknown.any():
         columns = [
@@ -1205,11 +1154,12 @@ def check_cue_rank_bounds(mm, top_ns, audit_dir):
 
 
 def add_industry_cue_flags(mm, top_n):
-    """主资格用行业排名，真实规模组只作辅助；不叠加原90分位门槛。"""
+    """主资格直接读取已准备的前4或前5标记，真实规模组仍作辅助。"""
     eligible = mm["rankingEligible"].eq(1)
-    mm["mainCueEligible"] = (
-        eligible & mm["industryRank"].le(top_n).fillna(False)
-    ).astype("int8")
+    column = f"isIndTop{top_n}"
+    if not mm[column].isin([0, 1]).all():
+        raise ValueError("实际提示公司的行业前列资格仍不确定，不能补成0。")
+    mm["mainCueEligible"] = mm[column].astype("int8")
     mm["size90plus"] = (eligible & (mm["mktcap_tm3"] > mm["marketCap_90th_percentile"])).astype("int8")
     mm["size50_90"] = (eligible & (mm["mktcap_tm3"] > mm["marketCap_50th_percentile"]) & (mm["mktcap_tm3"] <= mm["marketCap_90th_percentile"])).astype("int8")
     mm["size10_50"] = (eligible & (mm["mktcap_tm3"] >= mm["marketCap_10th_percentile"]) & (mm["mktcap_tm3"] <= mm["marketCap_50th_percentile"])).astype("int8")
@@ -1248,45 +1198,48 @@ def prepare_definition_candidates(
     candidates: pd.DataFrame,
     definition: str,
     top_n: int | None = None,
+    industry_daily: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """只改变本阶段主提示资格与行业筛选，返回公司对明细。"""
-    if definition not in {"size90", "hs300", "industry_top"}:
-        raise ValueError("提示口径只能为市值90分位、沪深300或行业排名。")
+    if definition not in {"size90", "size95", "hs300", "industry_top"}:
+        raise ValueError("提示口径只能为市值90分位、市值95分位、沪深300或行业排名。")
     paths = build_input_paths(root)
     mm = candidates.copy()
     if definition == "industry_top":
         if top_n is None:
             raise ValueError("行业排名口径必须指定每行业入选名额。")
-        rank_cache = load_rank_cache(
-            root=root,
-            cache_dir=root / RANK_CACHE_DIR_NAME,
-            start_year=START_YEAR,
-            end_year=END_YEAR,
-            overrides=INDUSTRY_OVERRIDES,
-        )
         calendar = pd.read_csv(
             paths["TRD_Cale_td_path"],
             usecols=["td", "Trddt"],
             parse_dates=["Trddt"],
         )
+        if industry_daily is None:
+            industry_daily = load_industry_daily_for_candidates(root, candidates, calendar)
         audit_dir = stage_root(root) / "提示事件" / f"行业前{top_n}名" / "核对清单"
         # 行业分支的排名市值与权重统一来自含金融公司的排名源。
         # 先移除第一阶段的同名市值列，避免合并后出现重名后缀。
         mm = mm.drop(columns=["mktcap_tm3", "float_mktcap_tm3"], errors="ignore")
-        mm = merge_rank_information(mm, calendar, rank_cache, audit_dir)
+        mm = merge_rank_information(mm, calendar, industry_daily, audit_dir)
         mm = mm.loc[mm["rankingEligible"].eq(1)].copy()
-        mm = filter_event_industries(mm, rank_cache, audit_dir)
+        mm = filter_event_industries(mm, industry_daily, audit_dir)
         check_cue_rank_bounds(mm, top_ns=(int(top_n),), audit_dir=audit_dir)
     else:
         if definition == "hs300":
             mm, _, _ = merge_hs300_membership(mm, paths["hs300_membership_path"])
         keys = filter_same_industry_pairs(mm, paths["industry_path"])
         mm = apply_pair_filters(mm, keys)
-        if definition == "size90":
-            mm = mm.dropna(subset=[
-                "mktcap_tm3", "marketCap_90th_percentile",
-                "marketCap_50th_percentile", "marketCap_10th_percentile",
-            ]).copy()
+        if definition in {"size90", "size95"}:
+            required_columns = [
+                "mktcap_tm3",
+                "marketCap_90th_percentile",
+                "marketCap_50th_percentile",
+                "marketCap_10th_percentile",
+            ]
+
+            if definition == "size95":
+                required_columns.append("marketCap_95th_percentile")
+
+            mm = mm.dropna(subset=required_columns).copy()
     return mm
 
 
@@ -1346,6 +1299,19 @@ def write_definition_output(
     summary = {
         "stage": 2,
         "cue_definition": definition,
+        "cue_label": (
+            f"行业前{top_n}名"
+            if definition == "industry_top"
+            else {
+                "size90": "市值90分位",
+                "size95": "市值95分位",
+                "hs300": "沪深300",
+            }[definition]
+        ),
+        "marketcap_quantile": {
+            "size90": 0.90,
+            "size95": 0.95,
+        }.get(definition),
         "industry_top_n": top_n,
         "grain": "StkcdRecall × date",
         "rows": int(len(events)),
@@ -1371,8 +1337,9 @@ def build_one_definition(
     candidates: pd.DataFrame,
     definition: str,
     top_n: int | None = None,
+    industry_daily: pd.DataFrame | None = None,
 ) -> dict:
-    mm = prepare_definition_candidates(root, candidates, definition, top_n)
+    mm = prepare_definition_candidates(root, candidates, definition, top_n, industry_daily)
     events, cue_pairs = add_cue_variables(mm, definition, top_n)
     events, cue_pairs = add_definition_metadata(events, cue_pairs, definition, top_n)
     return write_definition_output(root, events, cue_pairs, definition, top_n)
@@ -1381,12 +1348,22 @@ def build_one_definition(
 def main() -> dict:
     root = find_root()
     candidates = read_candidates(root)
+    # 前4和前5共用同一份实际需要的资格行，正式日度文件只扫描一次。
+    industry_daily = None
     results = []
-    for definition, top_n in [("size90", None), ("hs300", None)] + [
+    for definition, top_n in [
+        ("size90", None),
+        ("size95", None),
+        ("hs300", None),
+    ] + [
         ("industry_top", number) for number in TOP_NS
     ]:
         print(f"构造提示事件：{definition}，行业名额：{top_n}", flush=True)
-        results.append(build_one_definition(root, candidates, definition, top_n))
+        if definition == "industry_top" and industry_daily is None:
+            paths = build_input_paths(root)
+            calendar = pd.read_csv(paths["TRD_Cale_td_path"], usecols=["td", "Trddt"], parse_dates=["Trddt"])
+            industry_daily = load_industry_daily_for_candidates(root, candidates, calendar)
+        results.append(build_one_definition(root, candidates, definition, top_n, industry_daily))
     index_path = stage_root(root) / "提示事件" / "本次运行结果.json"
     save_summary(index_path, {"stage": 2, "results": results})
     return {"results": results, "index_path": index_path}

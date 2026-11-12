@@ -24,6 +24,26 @@ CHUNK_SIZE = 250_000
 STAGE_ROOT_NAME = "三阶段合并"
 EVENT_ROOT_NAME = "提示事件"
 FINAL_ROOT_NAME = "最终面板"
+# 本次使用的被解释变量口径。
+RETURN_DEFINITION = "self_built_labels"
+
+RETURN_SETTINGS = {
+    "self_built_labels": (
+        "自算标签收益",
+        "DGTW特征调整收益率.csv",
+    ),
+    "official_labels": (
+        "官方标签收益",
+        "官方标签_特征调整收益率.csv",
+    ),
+}
+
+if RETURN_DEFINITION not in RETURN_SETTINGS:
+    raise ValueError(
+        "被解释变量口径只能选择自算标签收益或官方标签收益。"
+    )
+
+RETURN_LABEL, RETURN_FILENAME = RETURN_SETTINGS[RETURN_DEFINITION]
 
 
 
@@ -43,7 +63,11 @@ def build_stage_paths(root: Path) -> dict:
         "performance_forecast_controls_path": root / "中间结果/02_变量构造结果/5公司公告事件/业绩预告快报控制变量_公告日期口径.csv",
         "other_event_controls_path": root / "中间结果/02_变量构造结果/5公司公告事件/专题研究事件控制变量_公告日期口径.csv",
         "AES_AEV_controls_path": root / "中间结果/02_变量构造结果/3分段新闻_AES_AEV/DATAGO_分段新闻_真实交易日控制变量.csv",
-        "adjusted_return_path": root / "中间结果/02_变量构造结果/1DGTW特征调整收益率/DGTW特征调整收益率.csv",
+        "adjusted_return_path": (
+            root
+            / "中间结果/02_变量构造结果/1DGTW特征调整收益率"
+            / RETURN_FILENAME
+        ),
     }
 
 
@@ -1797,51 +1821,82 @@ def add_final_panel_features(
     daily = clean_pattern_final_columns(daily)
     return daily
 
-
 def write_final_panel(
     root: Path,
     daily: pd.DataFrame,
     event_path: Path,
     definition: str,
     top_n: int | None,
+    paths: dict,
+    event_info: dict,
+    event_summary_path: Path,
 ) -> dict:
-    """补充口径元数据并保存最终面板和审计摘要。"""
+    """按提示口径和被解释变量口径保存最终面板及摘要。"""
     daily = daily.copy()
     daily["cueDefinition"] = definition
-    daily["industryTopN"] = int(top_n) if top_n is not None else pd.NA
+    daily["industryTopN"] = (
+        int(top_n) if top_n is not None else pd.NA
+    )
 
-    label = f"行业前{top_n}名" if definition == "industry_top" else definition
-    folder = stage_root(root) / FINAL_ROOT_NAME / label
+    label = (
+        f"行业前{top_n}名"
+        if definition == "industry_top"
+        else definition
+    )
+
+    folder = (
+        stage_root(root)
+        / FINAL_ROOT_NAME
+        / label
+        / RETURN_LABEL
+    )
     folder.mkdir(parents=True, exist_ok=True)
-    output_path = folder / f"最终回归面板_筛样规格{REGRESSION_SAMPLE_SPEC}.csv"
-    summary_path = folder / "最终面板审计摘要.json"
+
+    output_path = folder / (
+        f"最终回归面板_筛样规格{REGRESSION_SAMPLE_SPEC}.csv"
+    )
+    summary_path = output_path.with_suffix(".json")
+
     daily.to_csv(
         output_path,
         index=False,
         encoding="utf-8-sig",
         date_format="%Y-%m-%d",
     )
+
     summary = {
         "stage": 3,
         "cue_definition": definition,
+        "cue_label": event_info["cue_label"],
+        "marketcap_quantile": event_info["marketcap_quantile"],
         "industry_top_n": top_n,
+        "cue_column": "quarterLag1size90plus",
+        "return_definition": RETURN_DEFINITION,
+        "return_label": RETURN_LABEL,
+        "return_source_path": str(paths["adjusted_return_path"]),
         "regression_sample_spec": REGRESSION_SAMPLE_SPEC,
         "grain": "StkcdRecall × Trddt",
         "rows": int(len(daily)),
         "firms": int(daily["StkcdRecall"].nunique()),
-        "key_duplicate_count": int(daily.duplicated(["StkcdRecall", "Trddt"]).sum()),
+        "key_duplicate_count": int(
+            daily.duplicated(["StkcdRecall", "Trddt"]).sum()
+        ),
         "event_path": str(event_path),
+        "event_summary_path": str(event_summary_path),
         "output_path": str(output_path),
     }
     save_summary(summary_path, summary)
+
     return {
         "cue_definition": definition,
+        "cue_label": event_info["cue_label"],
         "industry_top_n": top_n,
+        "return_definition": RETURN_DEFINITION,
+        "return_label": RETURN_LABEL,
         "output_path": output_path,
         "summary_path": summary_path,
-        "rows": len(daily),
+        "rows": int(len(daily)),
     }
-
 
 def finish_one_definition(
     root: Path,
@@ -1850,6 +1905,36 @@ def finish_one_definition(
     definition: str,
     top_n: int | None,
 ) -> dict:
+    # 先核对第二阶段摘要，再读取事件表和日度大表。
+    event_summary_path = event_path.with_name("提示事件审计摘要.json")
+
+    if not event_summary_path.is_file():
+        raise FileNotFoundError(
+            f"缺少第二阶段口径摘要：{event_summary_path}"
+        )
+
+    event_info = json.loads(
+        event_summary_path.read_text(encoding="utf-8")
+    )
+
+    required_fields = {"cue_label", "marketcap_quantile"}
+    missing_fields = required_fields - event_info.keys()
+
+    if missing_fields:
+        raise ValueError(
+            f"第二阶段摘要缺少字段：{sorted(missing_fields)}。"
+            "请先用修改后的第二阶段生成对应口径。"
+        )
+
+    if event_info["cue_definition"] != definition:
+        raise ValueError("事件摘要的提示口径与当前选择不一致。")
+
+    if event_info["industry_top_n"] != top_n:
+        raise ValueError("事件摘要的行业名额与当前选择不一致。")
+
+    if Path(event_info["event_path"]).resolve() != event_path.resolve():
+        raise ValueError("事件摘要对应的事件文件与当前选择不一致。")
+
     events = read_event_table(event_path)
     daily = load_recalled_daily_panel(root, paths)
     daily = add_final_panel_features(
@@ -1859,26 +1944,81 @@ def finish_one_definition(
         paths=paths,
         definition=definition,
     )
-    return write_final_panel(root, daily, event_path, definition, top_n)
+    return write_final_panel(
+        root=root,
+        daily=daily,
+        event_path=event_path,
+        definition=definition,
+        top_n=top_n,
+        paths=paths,
+        event_info=event_info,
+        event_summary_path=event_summary_path,
+    )
 
 
 def main() -> dict:
     root = find_root()
     paths = build_stage_paths(root)
     event_root = stage_root(root) / EVENT_ROOT_NAME
+
+    # 检查本次选择的基础调整收益文件。
+    if not paths["adjusted_return_path"].is_file():
+        raise FileNotFoundError(
+            f"缺少所选基础调整收益：{paths['adjusted_return_path']}"
+        )
+
+    # 同一种被解释变量口径，分别处理五种提示口径。
     definitions = [
         ("size90", None, event_root / "size90/提示事件.csv"),
+        ("size95", None, event_root / "size95/提示事件.csv"),
         ("hs300", None, event_root / "hs300/提示事件.csv"),
         ("industry_top", 4, event_root / "行业前4名/提示事件.csv"),
         ("industry_top", 5, event_root / "行业前5名/提示事件.csv"),
     ]
+
+    # 开始计算前，检查各口径的事件表和摘要是否齐全。
+    for definition, top_n, event_path in definitions:
+        if not event_path.is_file():
+            raise FileNotFoundError(
+                f"缺少第二阶段提示事件表：{event_path}"
+            )
+
+        event_summary_path = event_path.with_name(
+            "提示事件审计摘要.json"
+        )
+        if not event_summary_path.is_file():
+            raise FileNotFoundError(
+                f"缺少第二阶段口径摘要：{event_summary_path}"
+            )
+
     results = [
-        finish_one_definition(root, paths, event_path, definition, top_n)
+        finish_one_definition(
+            root, paths, event_path, definition, top_n
+        )
         for definition, top_n, event_path in definitions
     ]
-    index_path = stage_root(root) / FINAL_ROOT_NAME / "本次运行结果.json"
-    save_summary(index_path, {"stage": 3, "results": results})
-    return {"results": results, "index_path": index_path}
+
+    # 运行索引按被解释变量口径分别保存。
+    index_path = (
+        stage_root(root)
+        / FINAL_ROOT_NAME
+        / RETURN_LABEL
+        / "本次运行结果.json"
+    )
+    save_summary(
+        index_path,
+        {
+            "stage": 3,
+            "return_definition": RETURN_DEFINITION,
+            "return_label": RETURN_LABEL,
+            "results": results,
+        },
+    )
+
+    return {
+        "results": results,
+        "index_path": index_path,
+    }
 
 
 if __name__ == "__main__":

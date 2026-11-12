@@ -13,7 +13,7 @@
 """
 
 from __future__ import annotations
-
+import json
 from pathlib import Path
 import gc
 import sys
@@ -41,13 +41,86 @@ if str(SHARED_DIR) not in sys.path:
 # 缩尾、统计与实际回归样本统一复用从原综合回归提取的订单失衡计算。
 from 订单失衡估计 import winsorize_1pct, summary_statistics, run_oib_regression
 
-PATTERN_PATH = PROJECT_ROOT / "中间结果/04_合并数据/Pattern样本_最终回归面板.csv"
-OIB_PATH = PROJECT_ROOT / "中间结果/02_变量构造结果/2交易行为OIB、Avol/OIB_CSMAR_prep.csv"
-OUTPUT_DIR = PROJECT_ROOT / "图表结果" / "01_主线图表" / "表1_描述性统计"
+# 1. 选择本次需要分析的最终面板。
+PATTERN_PATH = PROJECT_ROOT / (
+    "中间结果/04_合并数据/三阶段合并/"
+    "最终面板/size90/自算标签收益/"
+    "最终回归面板_筛样规格5.csv"
+)
+
+# 2. 读取与这份面板同名的口径摘要。
+SUMMARY_PATH = PATTERN_PATH.with_suffix(".json")
+
+with SUMMARY_PATH.open(encoding="utf-8") as file:
+    panel_info = json.load(file)
+
+required_fields = {
+    "cue_definition",
+    "cue_label",
+    "industry_top_n",
+    "return_definition",
+    "return_label",
+    "regression_sample_spec",
+    "output_path",
+}
+missing_fields = required_fields - panel_info.keys()
+
+if missing_fields:
+    raise ValueError(
+        f"面板摘要缺少字段：{sorted(missing_fields)}。"
+        "请先用修改后的第三阶段生成对应面板及同名摘要。"
+    )
+
+# 核对摘要是否对应本次选定的面板。
+if Path(panel_info["output_path"]).resolve() != PATTERN_PATH.resolve():
+    raise ValueError("口径摘要对应的面板与本次选择不一致。")
+
+# 3. 直接从摘要取得提示口径和被解释变量口径。
+CUE_DEFINITION = panel_info["cue_definition"]
+CUE_LABEL = panel_info["cue_label"]
+INDUSTRY_TOP_N = panel_info["industry_top_n"]
+
+RETURN_DEFINITION = panel_info["return_definition"]
+RETURN_LABEL = panel_info["return_label"]
+
+INPUT_SAMPLE_SPEC = int(panel_info["regression_sample_spec"])
+
+if INPUT_SAMPLE_SPEC not in (5, 6):
+    raise ValueError("无法识别摘要中的合并筛样规格。")
+
+# 4. 核对面板文件名与合并筛样规格。
+expected_name = f"最终回归面板_筛样规格{INPUT_SAMPLE_SPEC}.csv"
+if PATTERN_PATH.name != expected_name:
+    raise ValueError("面板文件名与摘要中的筛样规格不一致。")
+
+# 5. 订单失衡数据来源保持原设置。
+OIB_PATH = PROJECT_ROOT / (
+    "中间结果/02_变量构造结果/"
+    "2交易行为OIB、Avol/OIB_CSMAR_prep.csv"
+)
+
+# 6. 按提示口径、被解释变量口径、合并筛样规格和分析任务组织输出目录。
+OUTPUT_DIR = (
+    PROJECT_ROOT
+    / "图表结果"
+    / "01_主线图表"
+    / CUE_LABEL
+    / RETURN_LABEL
+    / f"合并筛样规格{INPUT_SAMPLE_SPEC}"
+    / "表1_描述性统计"
+)
+
 TABLE1_IMAGE_PATH = OUTPUT_DIR / "table1_描述性统计.png"
 START_YEAR = 2005
 END_YEAR = 2025
 
+
+print("输入面板：", PATTERN_PATH)
+print("口径摘要：", SUMMARY_PATH)
+print("提示口径：", CUE_LABEL)
+print("被解释变量口径：", RETURN_LABEL)
+print("合并筛样规格：", INPUT_SAMPLE_SPEC)
+print("图片输出：", TABLE1_IMAGE_PATH)
 
 # 被提示公司的盈余公告列
 own_ea_cols = (

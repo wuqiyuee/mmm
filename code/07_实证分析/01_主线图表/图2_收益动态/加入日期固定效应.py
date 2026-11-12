@@ -1,6 +1,6 @@
 """图2：收益动态和长期反转——加入日期固定效应版本。
 
-直接读取选定筛样规格的沪深300正式合并面板，
+直接读取选定筛样规格的市值90分位正式合并面板，
 沿用面板中已有的缩尾收益，各窗口分别处理自身收益缺失。
 
 吸收被提示公司×年度季度及交易日期两组固定效应，
@@ -53,7 +53,7 @@ if str(MODULE_DIR) not in sys.path:
 
 from 图2图3扩展_日期固定效应回归公共模块 import two_way_cluster_covariance
 
-# 一、输入面板：与表2读取同一份沪深300最终面板。
+# 一、输入面板：与表2读取同一份市值90分位最终面板。
 # 选择输入面板的回归样本筛选规格：5或6。
 # 这是合并阶段的筛样选择，不是本脚本的回归规格；本脚本始终使用双固定效应。
 INPUT_SAMPLE_SPEC = 5
@@ -62,21 +62,22 @@ if INPUT_SAMPLE_SPEC not in (5, 6):
     raise ValueError("输入面板的筛样规格只能选择5或6。")
 
 INPUT_PANEL_PATH = ROOT / (
-    "中间结果/04_合并数据/"
-    f"Pattern样本_最终回归面板_沪深300_筛样规格{INPUT_SAMPLE_SPEC}.csv"
+    "中间结果/04_合并数据/三阶段合并/"
+    "最终面板/size90/"
+    f"最终回归面板_筛样规格{INPUT_SAMPLE_SPEC}.csv"
 )
 
 # 二、提示变量、新闻来源及研究口径说明。
-CUE_COLUMN = "quarterLag1HS300"
+CUE_COLUMN = "quarterLag1size90plus"
 NEWS_SOURCE = "datago_segmented"
 
 SPEC_ID = (
-    "沪深300_个人365天_数行者分段_允许填充_全期"
+    "市值90分位_个人365天_数行者分段_允许填充_全期"
     f"_筛样规格{INPUT_SAMPLE_SPEC}"
 )
 
 SPEC_DESCRIPTION = (
-    "历史沪深300提示；个人365天共同覆盖排除；一级供应链及同行业排除；"
+    "市值90分位提示；个人365天共同覆盖排除；一级供应链及同行业排除；"
     "提示方保留金融和房地产；被提示方沿用非金融等基础资格、保留房地产，"
     "不追加市值和60个月交易史筛选；2005—2009年数行者报刊、"
     "2010—2025年数行者网络；允许合格填充日起点；保留全部年份"
@@ -121,7 +122,7 @@ from matplotlib import font_manager
 
 # 五、输出位置：结果和图片均标明输入面板的筛样规格。
 OUTPUT_DIR = ROOT / "图表结果" / "01_主线图表" / "图2_收益动态"
-OUTPUT_TAG = f"沪深300_筛样规格{INPUT_SAMPLE_SPEC}"
+OUTPUT_TAG = f"市值90分位_筛样规格{INPUT_SAMPLE_SPEC}"
 
 RESULT_PATH = OUTPUT_DIR / (
     f"图2_收益动态和长期反转_加入日期固定效应_{OUTPUT_TAG}_结果.csv"
@@ -255,7 +256,7 @@ def figure2_consistent_inference(
     diagonal = pd.Series(np.diag(covariance), index=names)
     reported = [name for name in names if name != "const"]
     if not np.isfinite(diagonal[reported]).all() or diagonal[CUE_COLUMN] <= 0:
-        raise ValueError("聚类方差非有限，或沪深300提示系数的聚类方差非正。")
+        raise ValueError("聚类方差非有限，或市值90分位提示系数的聚类方差非正。")
     fe_rank = exact_fixed_effect_rank(reg, fe_code_cols)
     slope_count = len(names) - 1
     degrees = len(reg) - fe_rank - (slope_count if fe_code_cols else len(names))
@@ -351,8 +352,8 @@ def read_figure2_panel(horizons: list[int]) -> pd.DataFrame:
     if data.duplicated(["StkcdRecall", "Trddt"]).any():
         raise ValueError("被提示公司与日期的组合不唯一。")
 
-    if not data["cueDefinition"].eq("hs300").fillna(False).all():
-        raise ValueError("输入面板不是统一的沪深300提示口径。")
+    if not data["cueDefinition"].eq("size90").fillna(False).all():
+        raise ValueError("输入面板不是统一的市值90分位提示口径。")
 
     # 提示、27项控制和两个基础收益窗口应当完整。
     required_columns = [
@@ -812,7 +813,7 @@ def draw_figure2_date_fe(
     )
 
     axis.set_title(
-        "收益动态和长期反转：历史沪深300提示\n"
+        "收益动态和长期反转：市值90分位提示\n"
         "个人365天排除；数行者分段新闻；合格填充日起点；全部年份\n"
         "固定效应：被提示公司×年度季度；交易日期（事件起点）",
         fontsize=12,

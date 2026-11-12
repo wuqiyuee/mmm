@@ -26,6 +26,24 @@ STAGE_ROOT_NAME = "三阶段合并"
 EVENT_ROOT_NAME = "提示事件"
 FINAL_ROOT_NAME = "最终面板"
 
+# 本次使用的收益来源。
+RETURN_DEFINITION = "self_built_labels"
+
+RETURN_SETTINGS = {
+    "self_built_labels": (
+        "自算标签收益",
+        "DGTW特征调整收益率.csv",
+    ),
+    "official_labels": (
+        "官方标签收益",
+        "官方标签_特征调整收益率.csv",
+    ),
+}
+
+if RETURN_DEFINITION not in RETURN_SETTINGS:
+    raise ValueError("被解释变量口径只能选择自算标签收益或官方标签收益。")
+
+RETURN_LABEL, RETURN_FILENAME = RETURN_SETTINGS[RETURN_DEFINITION]
 
 
 def build_stage_paths(root: Path) -> dict:
@@ -37,7 +55,11 @@ def build_stage_paths(root: Path) -> dict:
         "performance_forecast_controls_path": root / "中间结果/02_变量构造结果/5公司公告事件/业绩预告快报控制变量_公告日期口径.csv",
         "other_event_controls_path": root / "中间结果/02_变量构造结果/5公司公告事件/专题研究事件控制变量_公告日期口径.csv",
         "AES_AEV_controls_path": root / "中间结果/02_变量构造结果/3分段新闻_AES_AEV/DATAGO_分段新闻_真实交易日控制变量.csv",
-        "adjusted_return_path": root / "中间结果/02_变量构造结果/1DGTW特征调整收益率/DGTW特征调整收益率.csv",
+        "adjusted_return_path": (
+            root
+            / "中间结果/02_变量构造结果/1DGTW特征调整收益率"
+            / RETURN_FILENAME
+        ),
     }
 
 
@@ -418,6 +440,48 @@ CURRENT_LABEL = (
 EVENT_PATH = EVENT_ROOT / CURRENT_LABEL / "提示事件.csv"
 if not EVENT_PATH.is_file():
     raise FileNotFoundError(f"缺少第二阶段提示事件表：{EVENT_PATH}")
+# 检查所选收益文件是否存在。
+if not paths["adjusted_return_path"].is_file():
+    raise FileNotFoundError(
+        f"缺少所选基础调整收益：{paths['adjusted_return_path']}"
+    )
+
+# 读取第二阶段提示事件的口径摘要。
+EVENT_SUMMARY_PATH = EVENT_PATH.with_name("提示事件审计摘要.json")
+
+if not EVENT_SUMMARY_PATH.is_file():
+    raise FileNotFoundError(
+        f"缺少第二阶段口径摘要：{EVENT_SUMMARY_PATH}"
+    )
+
+event_info = json.loads(
+    EVENT_SUMMARY_PATH.read_text(encoding="utf-8")
+)
+
+# 新增字段必须由修改后的第二阶段实际生成。
+required_fields = {"cue_label", "marketcap_quantile"}
+missing_fields = required_fields - event_info.keys()
+
+if missing_fields:
+    raise ValueError(
+        f"第二阶段摘要缺少字段：{sorted(missing_fields)}。"
+        "请先用修改后的第二阶段生成对应口径。"
+    )
+
+# 核对摘要与当前选择是否对应。
+if event_info["cue_definition"] != CURRENT_DEFINITION:
+    raise ValueError("事件摘要的提示口径与当前选择不一致。")
+
+if event_info["industry_top_n"] != CURRENT_TOP_N:
+    raise ValueError("事件摘要的行业名额与当前选择不一致。")
+
+if Path(event_info["event_path"]).resolve() != EVENT_PATH.resolve():
+    raise ValueError("事件摘要对应的事件文件与当前选择不一致。")
+
+# 后续直接使用上游记录的中文名称和分位门槛。
+CUE_LABEL = event_info["cue_label"]
+MARKETCAP_QUANTILE = event_info["marketcap_quantile"]
+
 events = pd.read_csv(
     EVENT_PATH,
     encoding="utf-8-sig",
@@ -1682,35 +1746,62 @@ print("最终主键重复数：", daily.duplicated(["StkcdRecall", "Trddt"]).sum
 display(daily.head(20))
 
 
-# %% 21. 保存与普通版相同路径、字段和口径摘要
+# %% 21. 按提示口径和被解释变量口径保存最终面板及摘要
 daily = daily.copy()
 daily["cueDefinition"] = CURRENT_DEFINITION
-daily["industryTopN"] = int(CURRENT_TOP_N) if CURRENT_TOP_N is not None else pd.NA
+daily["industryTopN"] = (
+    int(CURRENT_TOP_N)
+    if CURRENT_TOP_N is not None
+    else pd.NA
+)
 
-label = f"行业前{CURRENT_TOP_N}名" if CURRENT_DEFINITION == "industry_top" else CURRENT_DEFINITION
-folder = stage_root(PROJECT_ROOT) / FINAL_ROOT_NAME / label
+# 不同提示口径、不同收益来源分别保存。
+folder = (
+    stage_root(PROJECT_ROOT)
+    / FINAL_ROOT_NAME
+    / CURRENT_LABEL
+    / RETURN_LABEL
+)
 folder.mkdir(parents=True, exist_ok=True)
-output_path = folder / f"最终回归面板_筛样规格{REGRESSION_SAMPLE_SPEC}.csv"
-summary_path = folder / "最终面板审计摘要.json"
+
+output_path = folder / (
+    f"最终回归面板_筛样规格{REGRESSION_SAMPLE_SPEC}.csv"
+)
+summary_path = output_path.with_suffix(".json")
+
 daily.to_csv(
     output_path,
     index=False,
     encoding="utf-8-sig",
     date_format="%Y-%m-%d",
 )
+
+# 将上游口径与本次收益来源一并记录。
 summary = {
     "stage": 3,
     "cue_definition": CURRENT_DEFINITION,
+    "cue_label": CUE_LABEL,
+    "marketcap_quantile": MARKETCAP_QUANTILE,
     "industry_top_n": CURRENT_TOP_N,
+    "cue_column": "quarterLag1size90plus",
+    "return_definition": RETURN_DEFINITION,
+    "return_label": RETURN_LABEL,
+    "return_source_path": str(paths["adjusted_return_path"]),
     "regression_sample_spec": REGRESSION_SAMPLE_SPEC,
     "grain": "StkcdRecall × Trddt",
     "rows": int(len(daily)),
     "firms": int(daily["StkcdRecall"].nunique()),
-    "key_duplicate_count": int(daily.duplicated(["StkcdRecall", "Trddt"]).sum()),
+    "key_duplicate_count": int(
+        daily.duplicated(["StkcdRecall", "Trddt"]).sum()
+    ),
     "event_path": str(EVENT_PATH),
+    "event_summary_path": str(EVENT_SUMMARY_PATH),
     "output_path": str(output_path),
 }
 save_summary(summary_path, summary)
 
+print("提示口径：", CUE_LABEL)
+print("被解释变量口径：", RETURN_LABEL)
 print("最终面板输出：", output_path)
+print("口径摘要输出：", summary_path)
 # %%

@@ -1,6 +1,6 @@
 """独立估计表2收益回归，可直接执行本文件。
 
-直接读取顶部选定筛样规格的沪深300正式合并面板。
+直接读取顶部选定提示口径和被解释变量口径的正式合并面板。
 提示、控制变量、收益缩尾和合并阶段两轮回归样本筛选，
 由合并脚本完成；具体研究口径见本文件顶部设置。
 
@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import gc
+import json
 import sys
 
 import numpy as np
@@ -48,28 +49,68 @@ PROJECT_ROOT = find_project_root()
 COMMON_DIR = PROJECT_ROOT / "code" / "07_实证分析" / "90_公共模块"
 if str(COMMON_DIR) not in sys.path:
     sys.path.insert(0, str(COMMON_DIR))
-# 正式输入：直接使用合并脚本生成的沪深300最终面板。
-# 选择输入面板的回归样本筛选规格：5或6。
-INPUT_SAMPLE_SPEC = 5
-
-if INPUT_SAMPLE_SPEC not in (5, 6):
-    raise ValueError("输入面板的筛样规格只能选择5或6。")
-
+# 1. 选择本次需要分析的最终面板。
 INPUT_PANEL_PATH = PROJECT_ROOT / (
-    "中间结果/04_合并数据/"
-    f"Pattern样本_最终回归面板_沪深300_筛样规格{INPUT_SAMPLE_SPEC}.csv"
+    "中间结果/04_合并数据/三阶段合并/"
+    "最终面板/size90/自算标签收益/"
+    "最终回归面板_筛样规格5.csv"
 )
 
-# 提示变量及当前研究口径说明。
-CUE_COLUMN = "quarterLag1HS300"
+# 2. 读取与面板同名的口径摘要。
+SUMMARY_PATH = INPUT_PANEL_PATH.with_suffix(".json")
 
+with SUMMARY_PATH.open(encoding="utf-8") as file:
+    panel_info = json.load(file)
+
+required_fields = {
+    "cue_definition",
+    "cue_label",
+    "industry_top_n",
+    "cue_column",
+    "return_definition",
+    "return_label",
+    "regression_sample_spec",
+    "output_path",
+}
+missing_fields = required_fields - panel_info.keys()
+
+if missing_fields:
+    raise ValueError(
+        f"面板摘要缺少字段：{sorted(missing_fields)}。"
+        "请先用修改后的第三阶段生成对应面板及同名摘要。"
+    )
+
+if Path(panel_info["output_path"]).resolve() != INPUT_PANEL_PATH.resolve():
+    raise ValueError("口径摘要对应的面板与本次选择不一致。")
+
+# 3. 从摘要取得提示口径、被解释变量口径和合并筛样规格。
+CUE_DEFINITION = panel_info["cue_definition"]
+CUE_LABEL = panel_info["cue_label"]
+INDUSTRY_TOP_N = panel_info["industry_top_n"]
+CUE_COLUMN = panel_info["cue_column"]
+
+RETURN_DEFINITION = panel_info["return_definition"]
+RETURN_LABEL = panel_info["return_label"]
+
+INPUT_SAMPLE_SPEC = int(panel_info["regression_sample_spec"])
+
+if INPUT_SAMPLE_SPEC not in (5, 6):
+    raise ValueError("无法识别摘要中的合并筛样规格。")
+
+expected_name = f"最终回归面板_筛样规格{INPUT_SAMPLE_SPEC}.csv"
+if INPUT_PANEL_PATH.name != expected_name:
+    raise ValueError("面板文件名与摘要中的筛样规格不一致。")
+
+# 4. 根据本次口径生成结果标识和说明。
 SPEC_ID = (
-    "沪深300_个人365天_数行者分段_允许填充_全期"
+    f"{CUE_LABEL}_{RETURN_LABEL}"
+    "_个人365天_数行者分段_允许填充_全期"
     f"_筛样规格{INPUT_SAMPLE_SPEC}"
 )
 
 SPEC_DESCRIPTION = (
-    "历史沪深300提示；个人365天共同覆盖排除；一级供应链及同行业排除；"
+    f"{CUE_LABEL}提示；被解释变量：{RETURN_LABEL}；"
+    "个人365天共同覆盖排除；一级供应链及同行业排除；"
     "提示方保留金融和房地产；被提示方沿用非金融等基础资格、保留房地产，"
     "不追加市值和60个月交易史筛选；2005—2009年数行者报刊、"
     "2010—2025年数行者网络；允许合格填充日起点；保留全部年份"
@@ -102,15 +143,18 @@ CONTROL_COLUMNS = OWN_EA_COLUMNS + EVENT_COLUMNS + NEWS_COLUMNS
 from 图2图3扩展_日期固定效应回归公共模块 import two_way_cluster_covariance
 
 
-# 二、设置表2输出路径、六个回归规格和两个收益窗口
+# 二、按提示口径、被解释变量口径和筛样规格设置表2输出路径
 OUTPUT_DIR = (
     PROJECT_ROOT
     / "图表结果"
     / "01_主线图表"
+    / CUE_LABEL
+    / RETURN_LABEL
+    / f"合并筛样规格{INPUT_SAMPLE_SPEC}"
     / "表2_收益回归"
 )
 
-OUTPUT_TAG = f"沪深300_筛样规格{INPUT_SAMPLE_SPEC}"
+OUTPUT_TAG = SPEC_ID
 
 TABLE2_RESULTS_PATH = OUTPUT_DIR / (
     f"表2_模型汇总_{OUTPUT_TAG}.csv"
@@ -338,7 +382,9 @@ def figure2_consistent_inference(
     diagonal = pd.Series(np.diag(covariance), index=names)
     reported = [name for name in names if name != "const"]
     if not np.isfinite(diagonal[reported]).all() or diagonal[CUE_COLUMN] <= 0:
-        raise ValueError("聚类方差非有限，或沪深300提示系数的聚类方差非正。")
+        raise ValueError(
+            f"聚类方差非有限，或{CUE_LABEL}提示系数的聚类方差非正。"
+        )
     fe_rank = exact_fixed_effect_rank(reg, fe_code_cols)
     slope_count = len(names) - 1
     degrees = len(reg) - fe_rank - (slope_count if fe_code_cols else len(names))
@@ -612,8 +658,10 @@ def load_selected_main_panel() -> pd.DataFrame:
     if data.duplicated(["StkcdRecall", "Trddt"]).any():
         raise ValueError("被提示公司与日期的组合不唯一。")
 
-    if not data["cueDefinition"].eq("hs300").fillna(False).all():
-        raise ValueError("输入面板不是统一的沪深300提示口径。")
+    if not data["cueDefinition"].eq(CUE_DEFINITION).fillna(False).all():
+        raise ValueError(
+            f"输入面板不是统一的{CUE_LABEL}提示口径。"
+        )
 
     # 面板应已完成两窗及完整控制变量的共同资格筛选。
     # 出现异常时提示核对合并步骤，不在这里静默删样本。
@@ -647,7 +695,7 @@ def main() -> list[Path]:
     print(f"当前正式表2口径：{SPEC_DESCRIPTION}")
     data = load_selected_main_panel()
     sample_name = "pattern"
-    sample_label = "A. 沪深300提示主样本（模式关系）"
+    sample_label = f"A. {CUE_LABEL}提示主样本（模式关系）"
 
     # 2. 每个收益窗口依次运行六个规格，汇总模型信息和全部系数。
     model_rows = []

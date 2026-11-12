@@ -1,6 +1,6 @@
 """图2：收益动态和长期反转——公司季度固定效应版本。
 
-直接读取选定筛样规格的沪深300正式合并面板。
+直接读取选定筛样规格的市值90分位正式合并面板。
 回归吸收被提示公司×年度季度固定效应，
 标准误按被提示公司和交易日期双向聚类。
 """
@@ -43,12 +43,13 @@ if INPUT_SAMPLE_SPEC not in (5, 6):
     raise ValueError("输入面板的筛样规格只能选择5或6。")
 
 INPUT_PANEL_PATH = ROOT / (
-    "中间结果/04_合并数据/"
-    f"Pattern样本_最终回归面板_沪深300_筛样规格{INPUT_SAMPLE_SPEC}.csv"
+    "中间结果/04_合并数据/三阶段合并/"
+    "最终面板/size90/"
+    f"最终回归面板_筛样规格{INPUT_SAMPLE_SPEC}.csv"
 )
 
 # 核心提示变量。
-CUE_COLUMN = "quarterLag1HS300"
+CUE_COLUMN = "quarterLag1size90plus"
 
 # 21项自身财报公告控制变量。
 OWN_EA_COLUMNS = (
@@ -83,7 +84,7 @@ PLOT_ONLY = False
 
 # 结果、进度和图片均标明输入面板的筛样规格。
 OUTPUT_DIR = ROOT / "图表结果" / "01_主线图表" / "图2_收益动态"
-OUTPUT_TAG = f"沪深300_筛样规格{INPUT_SAMPLE_SPEC}"
+OUTPUT_TAG = f"市值90分位_筛样规格{INPUT_SAMPLE_SPEC}"
 
 RESULT_PATH = OUTPUT_DIR / (
     f"图2_公司季度固定效应_{OUTPUT_TAG}_回归结果.csv"
@@ -376,8 +377,8 @@ def read_figure2_panel(horizons: list[int]) -> pd.DataFrame:
     if data.duplicated(["StkcdRecall", "Trddt"]).any():
         raise ValueError("被提示公司与日期的组合不唯一。")
 
-    if not data["cueDefinition"].eq("hs300").fillna(False).all():
-        raise ValueError("输入面板不是统一的沪深300提示口径。")
+    if not data["cueDefinition"].eq("size90").fillna(False).all():
+        raise ValueError("输入面板不是统一的市值90分位提示口径。")
 
     # 提示变量、27项控制和两个基础收益窗口应当完整。
     required_columns = [
