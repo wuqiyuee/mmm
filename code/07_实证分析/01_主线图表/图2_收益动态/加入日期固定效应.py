@@ -53,31 +53,69 @@ if str(MODULE_DIR) not in sys.path:
 
 from 图2图3扩展_日期固定效应回归公共模块 import two_way_cluster_covariance
 
-# 一、输入面板：与表2读取同一份市值90分位最终面板。
-# 选择输入面板的回归样本筛选规格：5或6。
-# 这是合并阶段的筛样选择，不是本脚本的回归规格；本脚本始终使用双固定效应。
-INPUT_SAMPLE_SPEC = 5
-
-if INPUT_SAMPLE_SPEC not in (5, 6):
-    raise ValueError("输入面板的筛样规格只能选择5或6。")
-
+# 一、选择输入面板并读取同名摘要。
+# 本脚本始终使用公司×年度季度和日期双固定效应。
 INPUT_PANEL_PATH = ROOT / (
     "中间结果/04_合并数据/三阶段合并/"
-    "最终面板/size90/"
-    f"最终回归面板_筛样规格{INPUT_SAMPLE_SPEC}.csv"
+    "最终面板/size90/自算标签收益/"
+    "最终回归面板_筛样规格5.csv"
 )
 
-# 二、提示变量、新闻来源及研究口径说明。
-CUE_COLUMN = "quarterLag1size90plus"
+SUMMARY_PATH = INPUT_PANEL_PATH.with_suffix(".json")
+
+with SUMMARY_PATH.open(encoding="utf-8") as file:
+    panel_info = json.load(file)
+
+required_fields = {
+    "cue_definition",
+    "cue_label",
+    "industry_top_n",
+    "cue_column",
+    "return_definition",
+    "return_label",
+    "regression_sample_spec",
+    "output_path",
+}
+missing_fields = required_fields - panel_info.keys()
+
+if missing_fields:
+    raise ValueError(
+        f"面板摘要缺少字段：{sorted(missing_fields)}。"
+        "请先用修改后的第三阶段生成对应面板及同名摘要。"
+    )
+
+if Path(panel_info["output_path"]).resolve() != INPUT_PANEL_PATH.resolve():
+    raise ValueError("口径摘要对应的面板与本次选择不一致。")
+
+CUE_DEFINITION = panel_info["cue_definition"]
+CUE_LABEL = panel_info["cue_label"]
+INDUSTRY_TOP_N = panel_info["industry_top_n"]
+CUE_COLUMN = panel_info["cue_column"]
+
+RETURN_DEFINITION = panel_info["return_definition"]
+RETURN_LABEL = panel_info["return_label"]
+
+INPUT_SAMPLE_SPEC = int(panel_info["regression_sample_spec"])
+
+if INPUT_SAMPLE_SPEC not in (5, 6):
+    raise ValueError("无法识别摘要中的合并筛样规格。")
+
+expected_name = f"最终回归面板_筛样规格{INPUT_SAMPLE_SPEC}.csv"
+if INPUT_PANEL_PATH.name != expected_name:
+    raise ValueError("面板文件名与摘要中的筛样规格不一致。")
+
+# 二、新闻来源及当前研究口径说明。
 NEWS_SOURCE = "datago_segmented"
 
 SPEC_ID = (
-    "市值90分位_个人365天_数行者分段_允许填充_全期"
+    f"{CUE_LABEL}_{RETURN_LABEL}"
+    "_个人365天_数行者分段_允许填充_全期"
     f"_筛样规格{INPUT_SAMPLE_SPEC}"
 )
 
 SPEC_DESCRIPTION = (
-    "市值90分位提示；个人365天共同覆盖排除；一级供应链及同行业排除；"
+    f"{CUE_LABEL}提示；被解释变量：{RETURN_LABEL}；"
+    "个人365天共同覆盖排除；一级供应链及同行业排除；"
     "提示方保留金融和房地产；被提示方沿用非金融等基础资格、保留房地产，"
     "不追加市值和60个月交易史筛选；2005—2009年数行者报刊、"
     "2010—2025年数行者网络；允许合格填充日起点；保留全部年份"
@@ -120,9 +158,22 @@ import matplotlib.pyplot as plt
 from matplotlib import font_manager
 
 
-# 五、输出位置：结果和图片均标明输入面板的筛样规格。
-OUTPUT_DIR = ROOT / "图表结果" / "01_主线图表" / "图2_收益动态"
-OUTPUT_TAG = f"市值90分位_筛样规格{INPUT_SAMPLE_SPEC}"
+# 五、按提示口径、被解释变量口径、筛样规格和固定效应版本保存。
+OUTPUT_DIR = (
+    ROOT
+    / "图表结果"
+    / "01_主线图表"
+    / CUE_LABEL
+    / RETURN_LABEL
+    / f"合并筛样规格{INPUT_SAMPLE_SPEC}"
+    / "图2_收益动态"
+    / "加入日期固定效应"
+)
+
+OUTPUT_TAG = (
+    f"{CUE_LABEL}_{RETURN_LABEL}"
+    f"_筛样规格{INPUT_SAMPLE_SPEC}"
+)
 
 RESULT_PATH = OUTPUT_DIR / (
     f"图2_收益动态和长期反转_加入日期固定效应_{OUTPUT_TAG}_结果.csv"
@@ -134,6 +185,9 @@ OUTPUT_PATH = OUTPUT_DIR / (
 
 
 RESULT_SPECIFICATION = {
+    "提示口径名称": CUE_LABEL,
+    "被解释变量口径名称": RETURN_LABEL,
+    "合并筛样规格": str(INPUT_SAMPLE_SPEC),
     "口径标识": SPEC_ID,
     "提示变量": CUE_COLUMN,
     "新闻来源": NEWS_SOURCE,
@@ -256,7 +310,9 @@ def figure2_consistent_inference(
     diagonal = pd.Series(np.diag(covariance), index=names)
     reported = [name for name in names if name != "const"]
     if not np.isfinite(diagonal[reported]).all() or diagonal[CUE_COLUMN] <= 0:
-        raise ValueError("聚类方差非有限，或市值90分位提示系数的聚类方差非正。")
+        raise ValueError(
+            f"聚类方差非有限，或{CUE_LABEL}提示系数的聚类方差非正。"
+        )
     fe_rank = exact_fixed_effect_rank(reg, fe_code_cols)
     slope_count = len(names) - 1
     degrees = len(reg) - fe_rank - (slope_count if fe_code_cols else len(names))
@@ -352,8 +408,10 @@ def read_figure2_panel(horizons: list[int]) -> pd.DataFrame:
     if data.duplicated(["StkcdRecall", "Trddt"]).any():
         raise ValueError("被提示公司与日期的组合不唯一。")
 
-    if not data["cueDefinition"].eq("size90").fillna(False).all():
-        raise ValueError("输入面板不是统一的市值90分位提示口径。")
+    if not data["cueDefinition"].eq(CUE_DEFINITION).fillna(False).all():
+        raise ValueError(
+            f"输入面板不是统一的{CUE_LABEL}提示口径。"
+        )
 
     # 提示、27项控制和两个基础收益窗口应当完整。
     required_columns = [

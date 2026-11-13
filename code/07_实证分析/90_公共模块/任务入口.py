@@ -14,31 +14,6 @@ from typing import Sequence
 
 
 TASKS = {
-    "表1_描述性统计": {
-        "说明": "从原综合回归提取的描述性统计；统计与图片同步生成。",
-        "数值文件": (),
-        "图片文件": ("table1_描述性统计.png",),
-        "模式": "统计与绘图",
-    },
-    "表2_收益回归": {
-        "说明": "选定口径的模式公司主样本；历史沪深300提示、个人365天共同覆盖排除、数行者分段新闻、合格填充起点及全期年份；两种收益窗口、六种规格，第（6）列为双固定效应主规格。",
-        "数值文件": tuple(
-            f"{name}_沪深300_筛样规格{sample_spec}.csv"
-            for sample_spec in (5, 6)
-            for name in ("表2_模型汇总", "表2_系数明细")
-        ),
-        "图片文件": tuple(
-            f"{name}_沪深300_筛样规格{sample_spec}.{extension}"
-            for sample_spec in (5, 6)
-            for name, extension in (
-                ("table2_收益回归_紧凑版", "png"),
-                ("table2_收益回归_完整系数版_模式公司主样本", "png"),
-                ("table2_收益回归_完整系数版_模式公司主样本_续页", "png"),
-                ("table2_收益回归_完整系数版_模式公司主样本", "pdf"),
-            )
-        ),
-        "模式": "估计与绘图",
-    },
     "表3_散户订单失衡": {
         "说明": "成交量订单失衡的基准回归；另保留日期固定效应结果的独立绘表能力。",
         "数值文件": ("表3_散户订单失衡结果.csv", "表3_系数明细.csv"),
@@ -194,20 +169,76 @@ def run_task(source: str | Path, argv: Sequence[str] | None = None) -> list[Path
     print(f"本次任务：{task_name}", flush=True)
     print(f"本次结果目录：{result_dir}", flush=True)
     written: list[Path] = []
+    estimate_outputs: list[Path] = []
+
     if args.stage in {"全部", "估计"}:
-        estimate_name = "估计回归_日期固定效应.py" if args.date_fixed_effects else "估计回归.py"
+        estimate_name = (
+            "估计回归_日期固定效应.py"
+            if args.date_fixed_effects
+            else "估计回归.py"
+        )
         estimator = _load_module(task_dir / estimate_name)
-        written.extend(estimator.main())
-    if args.stage in {"全部", "绘图"} and metadata["模式"] != "统计与绘图":
+        estimate_outputs = estimator.main()
+        written.extend(estimate_outputs)
+
+    if (
+        args.stage in {"全部", "绘图"}
+        and metadata["模式"] != "统计与绘图"
+    ):
         renderer = _load_module(task_dir / "绘制表格.py")
-        if args.result_dir is not None:
-            read_dir = args.result_dir.resolve()
+
+        if task_name == "表2_收益回归":
+            if args.stage == "全部":
+                if not estimate_outputs:
+                    raise RuntimeError(
+                        "表2完整运行时没有取得估计结果路径。"
+                    )
+
+                kwargs = {
+                    "summary_path": Path(estimate_outputs[0])
+                }
+                print(
+                    "表2绘图读取本次模型汇总：",
+                    kwargs["summary_path"],
+                    flush=True,
+                )
+
+            elif args.result_dir is not None:
+                kwargs = {
+                    "result_dir": args.result_dir.resolve()
+                }
+                print(
+                    "表2绘图读取指定结果目录：",
+                    kwargs["result_dir"],
+                    flush=True,
+                )
+
+            else:
+                # 不指定目录时，使用绘图脚本顶部选定的模型汇总文件。
+                kwargs = {}
+                print(
+                    "表2绘图使用脚本顶部选定的模型汇总文件。",
+                    flush=True,
+                )
+
         else:
-            read_dir = result_dir
-        print(f"绘图读取数值目录：{read_dir}", flush=True)
-        kwargs = {"result_dir": read_dir}
-        if task_name in {"表3_散户订单失衡", "表4_规模异质性"}:
+            read_dir = (
+                args.result_dir.resolve()
+                if args.result_dir is not None
+                else result_dir
+            )
+            print(
+                f"绘图读取数值目录：{read_dir}",
+                flush=True,
+            )
+            kwargs = {"result_dir": read_dir}
+
+        if task_name in {
+            "表3_散户订单失衡",
+            "表4_规模异质性",
+        }:
             kwargs["date_fixed_effects"] = args.date_fixed_effects
+
         written.extend(renderer.main(**kwargs))
     print("本次生成文件：", flush=True)
     for path in written:

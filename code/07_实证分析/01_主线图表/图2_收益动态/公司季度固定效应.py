@@ -1,6 +1,7 @@
 """图2：收益动态和长期反转——公司季度固定效应版本。
 
-直接读取选定筛样规格的市值90分位正式合并面板。
+直接读取选定的正式合并面板。
+提示口径、被解释变量口径及合并筛样规格均从面板同名摘要读取。
 回归吸收被提示公司×年度季度固定效应，
 标准误按被提示公司和交易日期双向聚类。
 """
@@ -35,21 +36,58 @@ def find_project_root() -> Path:
 
 ROOT = find_project_root()
 
-# 输入面板的合并阶段回归样本筛选规格：5或6。
-# 比较两种固定效应时，建议两个图2脚本选择相同的输入面板。
-INPUT_SAMPLE_SPEC = 5
-
-if INPUT_SAMPLE_SPEC not in (5, 6):
-    raise ValueError("输入面板的筛样规格只能选择5或6。")
-
+# 1. 选择本次需要分析的最终面板。
+# 比较两种固定效应时，两份图2脚本选择同一份最终面板。
 INPUT_PANEL_PATH = ROOT / (
     "中间结果/04_合并数据/三阶段合并/"
-    "最终面板/size90/"
-    f"最终回归面板_筛样规格{INPUT_SAMPLE_SPEC}.csv"
+    "最终面板/size90/自算标签收益/"
+    "最终回归面板_筛样规格5.csv"
 )
 
-# 核心提示变量。
-CUE_COLUMN = "quarterLag1size90plus"
+# 2. 读取与面板同名的口径摘要。
+SUMMARY_PATH = INPUT_PANEL_PATH.with_suffix(".json")
+
+with SUMMARY_PATH.open(encoding="utf-8") as file:
+    panel_info = json.load(file)
+
+required_fields = {
+    "cue_definition",
+    "cue_label",
+    "industry_top_n",
+    "cue_column",
+    "return_definition",
+    "return_label",
+    "regression_sample_spec",
+    "output_path",
+}
+missing_fields = required_fields - panel_info.keys()
+
+if missing_fields:
+    raise ValueError(
+        f"面板摘要缺少字段：{sorted(missing_fields)}。"
+        "请先用修改后的第三阶段生成对应面板及同名摘要。"
+    )
+
+if Path(panel_info["output_path"]).resolve() != INPUT_PANEL_PATH.resolve():
+    raise ValueError("口径摘要对应的面板与本次选择不一致。")
+
+# 3. 从摘要取得提示口径、被解释变量口径和合并筛样规格。
+CUE_DEFINITION = panel_info["cue_definition"]
+CUE_LABEL = panel_info["cue_label"]
+INDUSTRY_TOP_N = panel_info["industry_top_n"]
+CUE_COLUMN = panel_info["cue_column"]
+
+RETURN_DEFINITION = panel_info["return_definition"]
+RETURN_LABEL = panel_info["return_label"]
+
+INPUT_SAMPLE_SPEC = int(panel_info["regression_sample_spec"])
+
+if INPUT_SAMPLE_SPEC not in (5, 6):
+    raise ValueError("无法识别摘要中的合并筛样规格。")
+
+expected_name = f"最终回归面板_筛样规格{INPUT_SAMPLE_SPEC}.csv"
+if INPUT_PANEL_PATH.name != expected_name:
+    raise ValueError("面板文件名与摘要中的筛样规格不一致。")
 
 # 21项自身财报公告控制变量。
 OWN_EA_COLUMNS = (
@@ -82,10 +120,22 @@ HORIZONS = list(range(1, 51))
 # 仅重画时读取已有回归结果。
 PLOT_ONLY = False
 
-# 结果、进度和图片均标明输入面板的筛样规格。
-OUTPUT_DIR = ROOT / "图表结果" / "01_主线图表" / "图2_收益动态"
-OUTPUT_TAG = f"市值90分位_筛样规格{INPUT_SAMPLE_SPEC}"
+# 按提示口径、被解释变量口径、筛样规格和固定效应版本保存。
+OUTPUT_DIR = (
+    ROOT
+    / "图表结果"
+    / "01_主线图表"
+    / CUE_LABEL
+    / RETURN_LABEL
+    / f"合并筛样规格{INPUT_SAMPLE_SPEC}"
+    / "图2_收益动态"
+    / "公司季度固定效应"
+)
 
+OUTPUT_TAG = (
+    f"{CUE_LABEL}_{RETURN_LABEL}"
+    f"_筛样规格{INPUT_SAMPLE_SPEC}"
+)
 RESULT_PATH = OUTPUT_DIR / (
     f"图2_公司季度固定效应_{OUTPUT_TAG}_回归结果.csv"
 )
@@ -377,8 +427,10 @@ def read_figure2_panel(horizons: list[int]) -> pd.DataFrame:
     if data.duplicated(["StkcdRecall", "Trddt"]).any():
         raise ValueError("被提示公司与日期的组合不唯一。")
 
-    if not data["cueDefinition"].eq("size90").fillna(False).all():
-        raise ValueError("输入面板不是统一的市值90分位提示口径。")
+    if not data["cueDefinition"].eq(CUE_DEFINITION).fillna(False).all():
+        raise ValueError(
+            f"输入面板不是统一的{CUE_LABEL}提示口径。"
+        )
 
     # 提示变量、27项控制和两个基础收益窗口应当完整。
     required_columns = [
@@ -433,7 +485,7 @@ def run_figure2() -> list[Path]:
     """逐窗口估计，保存进度，最后整理结果并绘图。"""
     results, signature = load_progress(
         PROGRESS_PATH,
-        [INPUT_PANEL_PATH],
+        [INPUT_PANEL_PATH, SUMMARY_PATH],
         "图2：公司季度固定效应，原始小数收益率",
     )
 
@@ -604,7 +656,11 @@ def run_figure2() -> list[Path]:
 
     draw_dynamic_figure(
         result_table,
-        "收益动态和长期反转（公司×年度季度固定效应）",
+        (
+            f"收益动态和长期反转：{CUE_LABEL}提示\n"
+            f"{RETURN_LABEL}；合并筛样规格{INPUT_SAMPLE_SPEC}；"
+            "公司×年度季度固定效应"
+        ),
         OUTPUT_PATH,
     )
 
@@ -642,7 +698,11 @@ def main(argv=None) -> list[Path]:
         # 已保存结果为百分点，重画时直接使用。
         draw_dynamic_figure(
             saved_results,
-            "收益动态和长期反转（公司×年度季度固定效应）",
+            (
+                f"收益动态和长期反转：{CUE_LABEL}提示\n"
+                f"{RETURN_LABEL}；合并筛样规格{INPUT_SAMPLE_SPEC}；"
+                "公司×年度季度固定效应"
+            ),
             OUTPUT_PATH,
         )
         return [OUTPUT_PATH]

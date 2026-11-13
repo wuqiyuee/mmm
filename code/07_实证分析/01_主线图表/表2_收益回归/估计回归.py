@@ -735,7 +735,18 @@ def main() -> list[Path]:
     table2_results = pd.DataFrame(model_rows)
     table2_coefficients = pd.DataFrame(coefficient_rows)
 
-    # 3. 沿用原路径、列顺序、单位和编码，保存两张结果表。
+    # 两张结果表都保存同一组口径元数据，供绘图脚本读取。
+    metadata = {
+        "提示口径名称": CUE_LABEL,
+        "被解释变量口径名称": RETURN_LABEL,
+        "合并筛样规格": INPUT_SAMPLE_SPEC,
+    }
+
+    for frame in (table2_results, table2_coefficients):
+        for column, value in metadata.items():
+            frame[column] = value
+
+    # 3. 按当前口径目录、文件名和编码保存两张结果表。
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     table2_results.to_csv(
         TABLE2_RESULTS_PATH,
