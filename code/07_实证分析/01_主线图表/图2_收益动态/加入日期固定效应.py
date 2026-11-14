@@ -1,6 +1,7 @@
 """图2：收益动态和长期反转——加入日期固定效应版本。
 
-直接读取选定筛样规格的市值90分位正式合并面板，
+直接读取选定的正式合并面板，
+提示口径、被解释变量口径和合并筛样规格从同名摘要读取。
 沿用面板中已有的缩尾收益，各窗口分别处理自身收益缺失。
 
 吸收被提示公司×年度季度及交易日期两组固定效应，
@@ -11,9 +12,12 @@
 绘制99%、95%、90%置信区间，红点表示10%水平显著。
 每个窗口保存前检查口径和数值完整性。
 
-续算时核验输入面板的路径、大小、修改时间以及脚本、公共算法和依赖版本。
-上述信息记入现有结果表；旧结果缺少核验信息时须从头估计。
-导入本文件不会读取回归数据或写入结果文件。
+续算时核验输入面板的路径、大小、修改时间，
+以及脚本、公共算法和依赖版本。
+面板摘要的路径和内容也纳入计算版本核验。
+旧结果缺少核验信息时须从头估计。
+
+导入时读取口径摘要；面板读取、回归和结果保存由主函数执行。
 """
 
 from __future__ import annotations
@@ -60,6 +64,33 @@ INPUT_PANEL_PATH = ROOT / (
     "最终面板/size90/自算标签收益/"
     "最终回归面板_筛样规格5.csv"
 )
+
+
+def parse_args() -> argparse.Namespace:
+    """读取命令行参数。"""
+    parser = argparse.ArgumentParser(description="按当前表2主规格估计并绘制图2。")
+    parser.add_argument(
+        "--panel",
+        type=Path,
+        default=INPUT_PANEL_PATH,
+        help="最终面板文件路径；未指定时使用顶部默认路径。",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "仅在输入面板、研究设置和计算版本一致且诊断完整时续算；"
+            "面板重新生成或计算代码改变后，请从头运行。"
+        ),
+    )
+    return parser.parse_args()
+
+
+# 直接运行时先选择面板，再读取对应摘要；导入时沿用默认参数。
+CLI_ARGS = argparse.Namespace(panel=INPUT_PANEL_PATH, resume=False)
+if __name__ == "__main__":
+    CLI_ARGS = parse_args()
+    INPUT_PANEL_PATH = CLI_ARGS.panel
 
 SUMMARY_PATH = INPUT_PANEL_PATH.with_suffix(".json")
 
@@ -618,6 +649,10 @@ def current_run_information() -> dict[str, str]:
         raise FileNotFoundError(f"找不到正式合并面板：{INPUT_PANEL_PATH}")
     panel_stat = INPUT_PANEL_PATH.stat()
     calculation = {
+        "面板摘要路径": str(SUMMARY_PATH.resolve()),
+        "面板摘要内容哈希": hashlib.sha256(
+            SUMMARY_PATH.read_bytes()
+        ).hexdigest(),
         "本脚本": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "公共聚类算法": hashlib.sha256(
             (MODULE_DIR / "图2图3扩展_日期固定效应回归公共模块.py").read_bytes()
@@ -643,7 +678,7 @@ def validate_result_specification(results: pd.DataFrame) -> None:
     for column, expected in RESULT_SPECIFICATION.items():
         if column not in results or not results[column].astype(str).eq(expected).all():
             raise ValueError(
-                f"已有图2结果的“{column}”与当前表2口径不一致，不能续算。"
+                f"已有图2结果的“{column}”与本次选定口径不一致，不能续算。"
                 "请不带 --resume（续算参数）从头运行；旧文件不会在检查时被删除。"
             )
     for column, expected in current_run_information().items():
@@ -871,7 +906,8 @@ def draw_figure2_date_fe(
     )
 
     axis.set_title(
-        "收益动态和长期反转：市值90分位提示\n"
+        f"收益动态和长期反转：{CUE_LABEL}提示\n"
+        f"{RETURN_LABEL}；合并筛样规格{INPUT_SAMPLE_SPEC}\n"
         "个人365天排除；数行者分段新闻；合格填充日起点；全部年份\n"
         "固定效应：被提示公司×年度季度；交易日期（事件起点）",
         fontsize=12,
@@ -947,23 +983,9 @@ def draw_figure2_date_fe(
     )
 
 
-def parse_args() -> argparse.Namespace:
-    """读取命令行参数。"""
-    parser = argparse.ArgumentParser(description="按当前表2主规格估计并绘制图2。")
-    parser.add_argument(
-        "--resume",
-        action="store_true",
-        help=(
-            "仅在输入面板、研究设置和计算版本一致且诊断完整时续算；"
-            "面板重新生成或计算代码改变后，请从头运行。"
-        ),
-    )
-    return parser.parse_args()
-
-
 def main() -> None:
     """读取正式面板，逐窗口估计、保存并绘图。"""
-    args = parse_args()
+    args = CLI_ARGS
 
     run_information = current_run_information()
     existing_rows = load_completed_rows(resume=args.resume)

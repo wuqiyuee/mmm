@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -329,4 +330,12 @@ def main(
     return outputs
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="读取选定模型汇总及配套系数明细，绘制表2。")
+    parser.add_argument(
+        "--summary",
+        type=Path,
+        default=None,
+        help="模型汇总文件路径；未指定时使用顶部默认路径。",
+    )
+    cli_args = parser.parse_args()
+    main(summary_path=cli_args.summary)

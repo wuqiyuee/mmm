@@ -9,6 +9,7 @@ CSMAR（国泰安数据库）的Annodt（公告日期）只在非交易日映射
 
 from __future__ import annotations
 
+import argparse
 import gc
 import json
 from pathlib import Path
@@ -37,6 +38,36 @@ RETURN_SETTINGS = {
         "官方标签_特征调整收益率.csv",
     ),
 }
+
+# 直接运行时，命令行参数覆盖顶部默认设置。
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="按选定被解释变量口径和筛样规格生成五种提示口径的最终面板。"
+    )
+
+    parser.add_argument(
+        "--return-definition",
+        choices=tuple(RETURN_SETTINGS),
+        default=RETURN_DEFINITION,
+        help=(
+            "被解释变量口径："
+            "self_built_labels（自算标签收益）或"
+            "official_labels（官方标签收益）。"
+        ),
+    )
+
+    parser.add_argument(
+        "--sample-spec",
+        type=int,
+        choices=(5, 6),
+        default=REGRESSION_SAMPLE_SPEC,
+        help="合并阶段的回归样本筛选规格。",
+    )
+
+    cli_args = parser.parse_args()
+
+    RETURN_DEFINITION = cli_args.return_definition
+    REGRESSION_SAMPLE_SPEC = cli_args.sample_spec
 
 if RETURN_DEFINITION not in RETURN_SETTINGS:
     raise ValueError(

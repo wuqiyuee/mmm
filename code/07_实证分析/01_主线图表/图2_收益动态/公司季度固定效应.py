@@ -44,6 +44,25 @@ INPUT_PANEL_PATH = ROOT / (
     "最终回归面板_筛样规格5.csv"
 )
 
+# 直接运行时先解析面板和重画参数，再读取对应摘要。
+CLI_ARGS = argparse.Namespace(panel=INPUT_PANEL_PATH, plot_only=None)
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--panel",
+        type=Path,
+        default=INPUT_PANEL_PATH,
+        help="最终面板文件路径；未指定时使用顶部默认路径。",
+    )
+    parser.add_argument(
+        "--plot-only",
+        action="store_true",
+        default=None,
+        help="读取已有回归结果重新绘图。",
+    )
+    CLI_ARGS = parser.parse_args()
+    INPUT_PANEL_PATH = CLI_ARGS.panel
+
 # 2. 读取与面板同名的口径摘要。
 SUMMARY_PATH = INPUT_PANEL_PATH.with_suffix(".json")
 
@@ -669,14 +688,18 @@ def run_figure2() -> list[Path]:
 
 def main(argv=None) -> list[Path]:
     """运行回归，或读取已有结果重新绘图。"""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--plot-only",
-        action="store_true",
-        default=None,
-        help="读取已有回归结果重新绘图。",
-    )
-    args = parser.parse_args(argv)
+    if argv is None:
+        args = CLI_ARGS
+    else:
+        # 保留显式传入参数列表时原有的重画接口。
+        parser = argparse.ArgumentParser(description=__doc__)
+        parser.add_argument(
+            "--plot-only",
+            action="store_true",
+            default=None,
+            help="读取已有回归结果重新绘图。",
+        )
+        args = parser.parse_args(argv)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 

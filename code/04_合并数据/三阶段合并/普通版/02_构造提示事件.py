@@ -39,6 +39,7 @@ def build_input_paths(root: Path) -> dict:
         "TRD_Cale_td_path": root / "中间结果/01_清洗后样本/市场交易日历_td.csv",
         "hs300_membership_path": root / "中间结果/02_变量构造结果/9指数成分股/沪深300/沪深300_历史成分区间.csv",
         "industry_path": root / "中间结果/02_变量构造结果/同行业识别/个股行业代码完整面板_RESSET补缺.csv",
+        "eligibility_path": root / "中间结果/01_清洗后样本/基础清洗后个股日度样本索引_td.csv",
     }
 
 
@@ -1221,6 +1222,43 @@ def prepare_definition_candidates(
         mm = mm.drop(columns=["mktcap_tm3", "float_mktcap_tm3"], errors="ignore")
         mm = merge_rank_information(mm, calendar, industry_daily, audit_dir)
         mm = mm.loc[mm["rankingEligible"].eq(1)].copy()
+        # 欣泰退于2017-08-28终止上市；经核对，剔除当天作为提示公司的候选公司对。
+        delisted_cue_event = (
+            mm["Stkcd"].eq("300372")
+            & mm["event_Trddt"].eq(pd.Timestamp("2017-08-28"))
+        )
+        print(f"剔除欣泰退在2017-08-28作为提示公司的候选公司对：{int(delisted_cue_event.sum()):,}条。", flush=True)
+        mm = mm.loc[~delisted_cue_event].copy()
+        # 提前应用第三阶段已有的被提示公司日基础资格，避免检查不会进入日度面板的事件。
+        recalled_event_columns = ["StkcdRecall", "event_td", "event_Trddt"]
+        recalled_event_keys = pd.MultiIndex.from_frame(mm[recalled_event_columns].drop_duplicates())
+        recalled_base_parts = []
+        for chunk in pd.read_csv(
+            paths["eligibility_path"],
+            usecols=["Stkcd", "td", "Trddt"],
+            dtype={"Stkcd": "string"},
+            parse_dates=["Trddt"],
+            chunksize=250_000,
+            encoding="utf-8-sig",
+        ):
+            chunk["Stkcd"] = chunk["Stkcd"].apply(normalize_stock_code)
+            chunk = chunk.rename(columns={
+                "Stkcd": "StkcdRecall", "td": "event_td", "Trddt": "event_Trddt",
+            })
+            selected = chunk.loc[
+                pd.MultiIndex.from_frame(chunk[recalled_event_columns]).isin(recalled_event_keys),
+                recalled_event_columns,
+            ].copy()
+            if not selected.empty:
+                recalled_base_parts.append(selected)
+        if not recalled_base_parts:
+            raise ValueError("行业口径没有符合基础样本资格的被提示公司事件日。")
+        recalled_base = pd.concat(recalled_base_parts, ignore_index=True)
+        if recalled_base.duplicated(["StkcdRecall", "event_td"]).any():
+            raise ValueError("被提示公司基础样本索引的公司日键重复。")
+        rows_before_base_filter = len(mm)
+        mm = mm.merge(recalled_base, on=recalled_event_columns, how="inner", validate="m:1")
+        print(f"剔除被提示公司事件日不在基础样本索引中的候选公司对：{rows_before_base_filter - len(mm):,}条。", flush=True)
         mm = filter_event_industries(mm, industry_daily, audit_dir)
         check_cue_rank_bounds(mm, top_ns=(int(top_n),), audit_dir=audit_dir)
     else:

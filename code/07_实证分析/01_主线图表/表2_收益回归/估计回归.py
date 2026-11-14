@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import argparse
 import gc
 import json
 import sys
@@ -55,6 +56,18 @@ INPUT_PANEL_PATH = PROJECT_ROOT / (
     "最终面板/size90/自算标签收益/"
     "最终回归面板_筛样规格5.csv"
 )
+
+# 直接运行时，命令行参数覆盖顶部默认面板路径。
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="读取选定最终面板，估计表2收益回归。")
+    parser.add_argument(
+        "--panel",
+        type=Path,
+        default=INPUT_PANEL_PATH,
+        help="最终面板文件路径；未指定时使用顶部默认路径。",
+    )
+    cli_args = parser.parse_args()
+    INPUT_PANEL_PATH = cli_args.panel
 
 # 2. 读取与面板同名的口径摘要。
 SUMMARY_PATH = INPUT_PANEL_PATH.with_suffix(".json")
