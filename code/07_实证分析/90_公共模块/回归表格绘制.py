@@ -575,7 +575,7 @@ def draw_table2_compact(
         ],
         output_path=output_path,
         width=23.0,
-        label_right=0.285,
+        label_right=0.18,
         body_fontsize=9.0,
     )
 
