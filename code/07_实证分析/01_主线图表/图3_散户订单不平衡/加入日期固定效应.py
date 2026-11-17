@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import json
 import sys
 from pathlib import Path
 
@@ -71,6 +72,51 @@ RESULT_PATH = OUTPUT_DIR / "图3_散户订单不平衡动态_加入日期固定�
 TABLE3_DATE_FE_RESULT_PATH = ROOT / "图表结果" / "01_主线图表" / "表3_散户订单失衡" / "表3_散户订单失衡_加入日期固定效应结果.csv"
 
 OUTPUT_PATH = OUTPUT_DIR / "figure3_散户订单不平衡动态_加入日期固定效应.png"
+SAMPLE_DESCRIPTION = ""
+
+
+def configure_panel_paths(panel_path: Path) -> None:
+    """只调整输入、口径说明和输出位置，估计步骤保持原样。"""
+    global PATTERN_PATH, OUTPUT_DIR, RESULT_PATH, OUTPUT_PATH
+    global TABLE3_DATE_FE_RESULT_PATH, SAMPLE_DESCRIPTION
+
+    panel_path = Path(panel_path)
+    with panel_path.with_suffix(".json").open(encoding="utf-8") as file:
+        panel_info = json.load(file)
+    required_fields = {
+        "cue_definition", "cue_label", "industry_top_n", "cue_column",
+        "return_definition", "return_label", "regression_sample_spec", "output_path",
+    }
+    missing_fields = required_fields - panel_info.keys()
+    if missing_fields:
+        raise ValueError(f"面板摘要缺少字段：{sorted(missing_fields)}。")
+    if Path(panel_info["output_path"]).resolve() != panel_path.resolve():
+        raise ValueError("口径摘要对应的面板与本次选择不一致。")
+    sample_spec = int(panel_info["regression_sample_spec"])
+    if sample_spec not in (5, 6):
+        raise ValueError("无法识别摘要中的合并筛样规格。")
+    if panel_path.name != f"最终回归面板_筛样规格{sample_spec}.csv":
+        raise ValueError("面板文件名与摘要中的筛样规格不一致。")
+    if panel_info["cue_column"] != CUE_COL:
+        raise ValueError("面板摘要中的提示变量与当前图3所用变量不一致。")
+
+    PATTERN_PATH = panel_path
+    result_root = (
+        ROOT / "图表结果" / "01_主线图表"
+        / panel_info["cue_label"] / panel_info["return_label"]
+        / f"合并筛样规格{sample_spec}"
+    )
+    OUTPUT_DIR = result_root / "图3_散户订单不平衡" / "加入日期固定效应"
+    RESULT_PATH = OUTPUT_DIR / "图3_散户订单不平衡动态_加入日期固定效应结果.csv"
+    OUTPUT_PATH = OUTPUT_DIR / "figure3_散户订单不平衡动态_加入日期固定效应.png"
+    TABLE3_DATE_FE_RESULT_PATH = (
+        result_root / "表3_散户订单失衡" / "加入日期固定效应"
+        / "表3_散户订单失衡_加入日期固定效应结果.csv"
+    )
+    SAMPLE_DESCRIPTION = (
+        f"样本：{panel_info['cue_label']}；{panel_info['return_label']}；"
+        f"合并筛样规格{sample_spec}"
+    )
 
 
 CUE_COL = "quarterLag1size90plus"
@@ -962,7 +1008,8 @@ def draw_figure3_date_fe(
 
     axis.set_title(
         "散户订单不平衡动态\n"
-        "固定效应：被提示公司×年度季度；交易日期（事件起点）",
+        + (f"{SAMPLE_DESCRIPTION}\n" if SAMPLE_DESCRIPTION else "")
+        + "固定效应：被提示公司×年度季度；交易日期（事件起点）",
         fontsize=12,
     )
     axis.set_xlabel("事件窗口")
@@ -1028,6 +1075,11 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument(
+        "--panel",
+        type=Path,
+        help="最终面板文件路径；指定后读取同名口径摘要，未指定时沿用原默认面板。",
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help=(
@@ -1047,6 +1099,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+
+    if args.panel is not None:
+        configure_panel_paths(args.panel)
 
     if args.batch_size < 1:
         raise ValueError(

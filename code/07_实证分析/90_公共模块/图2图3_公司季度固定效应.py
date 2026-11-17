@@ -243,9 +243,10 @@ def draw_dynamic_figure(table, title, output_path):
     print(f"图已保存到：{output_path}")
 
 
-def load_pattern_panel(include_returns: bool, horizons=None):
+def load_pattern_panel(include_returns: bool, horizons=None, *, panel_path=None):
     """沿用原样本口径；图2按待估窗口读取收益，图3只读取共同变量。"""
-    all_cols = pd.read_csv(pattern_sample_PATH, nrows=0).columns.tolist()
+    selected_panel = pattern_sample_PATH if panel_path is None else Path(panel_path)
+    all_cols = pd.read_csv(selected_panel, nrows=0).columns.tolist()
 
     # 未指定时读取全部窗口；续算时只读取待完成窗口。
     if horizons is None:
@@ -296,7 +297,7 @@ def load_pattern_panel(include_returns: bool, horizons=None):
         raise ValueError(f"CSV 中缺少变量: {missing}")
 
     print("正在读取模式公司样本数据......")
-    df = pd.read_csv(pattern_sample_PATH, usecols=usecols)
+    df = pd.read_csv(selected_panel, usecols=usecols)
     df["Trddt"] = pd.to_datetime(df["Trddt"], errors="raise")
     df = df.loc[
         df["Trddt"].dt.year.between(START_YEAR, END_YEAR)
@@ -441,7 +442,10 @@ def run_figure2(fig2_result_path, fig2_progress_path, fig2_out_path):
     return [fig2_result_path, fig2_progress_path, fig2_out_path]
 
 
-def run_figure3(df, control_cols, fig3_result_path, fig3_progress_path, fig3_out_path):
+def run_figure3(
+    df, control_cols, fig3_result_path, fig3_progress_path, fig3_out_path,
+    *, panel_path=None, title=None,
+):
     """只估计图3的50个平均订单失衡窗口，缩尾仍在完整合并主样本上完成。"""
     oib_cols = [
         f"OIBvol_avg_t_tp{i}"
@@ -537,7 +541,7 @@ def run_figure3(df, control_cols, fig3_result_path, fig3_progress_path, fig3_out
     # 缩尾完成后，再开始保存和运行回归结果
     fig3_results, fig3_signature = load_progress(
         fig3_progress_path,
-        [pattern_sample_PATH, oib_path],
+        [pattern_sample_PATH if panel_path is None else Path(panel_path), oib_path],
         "图3：订单不平衡，百分点",
     )
 
@@ -633,7 +637,7 @@ def run_figure3(df, control_cols, fig3_result_path, fig3_progress_path, fig3_out
 
     draw_dynamic_figure(
         fig3_coef_df,
-        "散户订单不平衡动态（公司×年度季度固定效应）",
+        title or "散户订单不平衡动态（公司×年度季度固定效应）",
         fig3_out_path,
     )
 
@@ -649,12 +653,46 @@ def run_figure3(df, control_cols, fig3_result_path, fig3_progress_path, fig3_out
     return [fig3_result_path, fig3_progress_path, fig3_out_path]
 
 
-def main(figure_number: int, *, plot_only: bool | None = None) -> list[Path]:
+def main(
+    figure_number: int, *, plot_only: bool | None = None, panel_path=None,
+) -> list[Path]:
     """显式运行选定图，返回本次产物路径；不会运行另一图。"""
     if figure_number not in {2, 3}:
         raise ValueError("图号只能是2或3。")
     task_name = "图2_收益动态" if figure_number == 2 else "图3_散户订单不平衡"
     output_dir = ROOT / "图表结果" / "01_主线图表" / task_name
+    sample_description = ""
+    if panel_path is not None:
+        if figure_number != 3:
+            raise ValueError("本公共入口的面板选择参数仅用于图3。")
+        panel_path = Path(panel_path)
+        with panel_path.with_suffix(".json").open(encoding="utf-8") as file:
+            panel_info = json.load(file)
+        required_fields = {
+            "cue_definition", "cue_label", "industry_top_n", "cue_column",
+            "return_definition", "return_label", "regression_sample_spec", "output_path",
+        }
+        missing_fields = required_fields - panel_info.keys()
+        if missing_fields:
+            raise ValueError(f"面板摘要缺少字段：{sorted(missing_fields)}。")
+        if Path(panel_info["output_path"]).resolve() != panel_path.resolve():
+            raise ValueError("口径摘要对应的面板与本次选择不一致。")
+        sample_spec = int(panel_info["regression_sample_spec"])
+        if sample_spec not in (5, 6):
+            raise ValueError("无法识别摘要中的合并筛样规格。")
+        if panel_path.name != f"最终回归面板_筛样规格{sample_spec}.csv":
+            raise ValueError("面板文件名与摘要中的筛样规格不一致。")
+        if panel_info["cue_column"] != "quarterLag1size90plus":
+            raise ValueError("面板摘要中的提示变量与当前图3所用变量不一致。")
+        output_dir = (
+            ROOT / "图表结果" / "01_主线图表"
+            / panel_info["cue_label"] / panel_info["return_label"]
+            / f"合并筛样规格{sample_spec}" / task_name / "公司季度固定效应"
+        )
+        sample_description = (
+            f"\n样本：{panel_info['cue_label']}；{panel_info['return_label']}；"
+            f"合并筛样规格{sample_spec}"
+        )
     output_dir.mkdir(parents=True, exist_ok=True)
     result_path = output_dir / f"图{figure_number}_公司季度固定效应_回归结果.csv"
     # 新闻控制来源已切换，使用新进度文件开始估计；后续同口径运行仍可校验并续算。
@@ -664,7 +702,7 @@ def main(figure_number: int, *, plot_only: bool | None = None) -> list[Path]:
         title = "收益动态和长期反转（公司×年度季度固定效应）"
     else:
         image_path = output_dir / "figure3_散户订单不平衡动态.png"
-        title = "散户订单不平衡动态（公司×年度季度固定效应）"
+        title = "散户订单不平衡动态（公司×年度季度固定效应）" + sample_description
     should_plot_only = PLOT_ONLY if plot_only is None else plot_only
     if should_plot_only:
         # 完整数值结果已是最终单位；重画时不再次乘100，也不读取研究面板。
@@ -676,8 +714,9 @@ def main(figure_number: int, *, plot_only: bool | None = None) -> list[Path]:
             result_path, progress_path, image_path,
         )
     return run_figure3(
-        *load_pattern_panel(include_returns=False),
+        *load_pattern_panel(include_returns=False, panel_path=panel_path),
         result_path, progress_path, image_path,
+        panel_path=panel_path, title=title,
     )
 
 

@@ -6,11 +6,14 @@
 2. 交易日期。
 
 标准误仍按被提示公司和交易日期双向聚类。
+指定 --panel（输入面板）后读取同名口径摘要，按口径保存数值结果和图片。
 """
 
 from __future__ import annotations
 
 import gc
+import argparse
+import json
 from pathlib import Path
 import re
 
@@ -35,6 +38,7 @@ def find_project_root() -> Path:
 
 ROOT = find_project_root()
 OUTPUT_DIR = ROOT / "图表结果/01_主线图表/表3_散户订单失衡"
+DEFAULT_OUTPUT_DIR = OUTPUT_DIR
 
 PATTERN_PATH = (
     ROOT
@@ -42,6 +46,7 @@ PATTERN_PATH = (
     / "04_合并数据"
     / "Pattern样本_最终回归面板.csv"
 )
+DEFAULT_PATTERN_PATH = PATTERN_PATH
 
 OIB_PATH = (
     ROOT
@@ -56,6 +61,7 @@ TABLE3_DATE_FE_RESULTS_PATH = OUTPUT_DIR / "表3_散户订单失衡_加入日期
 TABLE3_DATE_FE_COEFFICIENTS_PATH = OUTPUT_DIR / "表3_散户订单失衡_加入日期固定效应系数明细.csv"
 
 TABLE3_DATE_FE_IMAGE_PATH = OUTPUT_DIR / "table3_散户订单失衡_完整系数版_加入日期固定效应_独立脚本.png"
+RUN_INFO = None
 
 FONT_PATH = Path("/System/Library/Fonts/Supplemental/Songti.ttc")
 if FONT_PATH.exists():
@@ -113,6 +119,61 @@ OIB_RAW_COLS = [
     "OIBvol_avg_t_tp1",
     "OIBvol_avg_t_tp10",
 ]
+
+
+def configure_input_output(panel_path: Path | None) -> None:
+    """仅设置输入、口径说明和输出路径，不改变样本处理及估计步骤。"""
+    global PATTERN_PATH, OUTPUT_DIR, TABLE3_DATE_FE_RESULTS_PATH
+    global TABLE3_DATE_FE_COEFFICIENTS_PATH, TABLE3_DATE_FE_IMAGE_PATH, RUN_INFO
+    PATTERN_PATH = DEFAULT_PATTERN_PATH
+    OUTPUT_DIR = DEFAULT_OUTPUT_DIR
+    RUN_INFO = None
+    if panel_path is not None:
+        PATTERN_PATH = Path(panel_path).expanduser().resolve()
+        if not PATTERN_PATH.is_file():
+            raise FileNotFoundError(f"输入面板不存在：{PATTERN_PATH}")
+        summary_path = PATTERN_PATH.with_suffix(".json")
+        with summary_path.open(encoding="utf-8") as file:
+            panel_info = json.load(file)
+        required_fields = {
+            "cue_definition", "cue_label", "cue_column", "return_definition",
+            "return_label", "regression_sample_spec", "output_path",
+        }
+        missing_fields = required_fields - panel_info.keys()
+        if missing_fields:
+            raise ValueError(f"面板摘要缺少字段：{sorted(missing_fields)}。")
+        if Path(panel_info["output_path"]).resolve() != PATTERN_PATH:
+            raise ValueError("口径摘要对应的面板与本次选择不一致。")
+        if panel_info["cue_column"] != CUE_COL:
+            raise ValueError("面板摘要中的提示变量与本脚本使用的字段不一致。")
+        sample_spec = int(panel_info["regression_sample_spec"])
+        if sample_spec not in (5, 6):
+            raise ValueError("无法识别摘要中的合并筛样规格。")
+        if PATTERN_PATH.name != f"最终回归面板_筛样规格{sample_spec}.csv":
+            raise ValueError("面板文件名与摘要中的筛样规格不一致。")
+        OUTPUT_DIR = (
+            ROOT / "图表结果/01_主线图表"
+            / panel_info["cue_label"] / panel_info["return_label"]
+            / f"合并筛样规格{sample_spec}" / "表3_散户订单失衡" / "加入日期固定效应"
+        )
+        RUN_INFO = {
+            key: panel_info[key]
+            for key in required_fields - {"output_path"}
+        }
+        RUN_INFO.update({
+            "input_panel_path": str(PATTERN_PATH),
+            "panel_summary_path": str(summary_path),
+            "fixed_effects": "加入日期固定效应",
+            "output_dir": str(OUTPUT_DIR),
+        })
+    TABLE3_DATE_FE_RESULTS_PATH = OUTPUT_DIR / "表3_散户订单失衡_加入日期固定效应结果.csv"
+    TABLE3_DATE_FE_COEFFICIENTS_PATH = OUTPUT_DIR / "表3_散户订单失衡_加入日期固定效应系数明细.csv"
+    TABLE3_DATE_FE_IMAGE_PATH = OUTPUT_DIR / "table3_散户订单失衡_完整系数版_加入日期固定效应_独立脚本.png"
+    if RUN_INFO is not None:
+        RUN_INFO.update({
+            "result_path": str(TABLE3_DATE_FE_RESULTS_PATH),
+            "coefficients_path": str(TABLE3_DATE_FE_COEFFICIENTS_PATH),
+        })
 
 
 def significance_stars(p_value: float) -> str:
@@ -659,6 +720,11 @@ def draw_table3_date_fe_full(
         "括号内为按被提示公司和交易日期双向聚类的标准误；"
         "*、**、*** 分别表示在10%、5%和1%水平上显著。",
     ]
+    if RUN_INFO is not None:
+        notes.insert(0, (
+            f"样本：{RUN_INFO['cue_label']}提示；{RUN_INFO['return_label']}对应样本；"
+            f"合并筛样规格{RUN_INFO['regression_sample_spec']}。"
+        ))
     title_height = 5.0
     header_height = 2.78
     notes_height = 0.85 * len(notes) + 0.75
@@ -720,7 +786,8 @@ def draw_table3_date_fe_full(
     axes.text(
         0.02,
         2.02,
-        "线索事件与散户订单失衡",
+        (f"线索事件与散户订单失衡（{RUN_INFO['cue_label']}）"
+         if RUN_INFO is not None else "线索事件与散户订单失衡"),
         ha="left",
         va="top",
         fontproperties=FONT_BOLD,
@@ -841,7 +908,8 @@ def draw_table3_date_fe_full(
     plt.close(figure)
 
 
-def main() -> list[Path]:
+def main(panel_path: Path | None = None) -> list[Path]:
+    configure_input_output(panel_path)
     TABLE3_DATE_FE_RESULTS_PATH.parent.mkdir(
         parents=True,
         exist_ok=True,
@@ -900,6 +968,9 @@ def main() -> list[Path]:
         index=False,
         encoding="utf-8-sig",
     )
+    if RUN_INFO is not None:
+        with (OUTPUT_DIR / "运行口径.json").open("w", encoding="utf-8") as file:
+            json.dump(RUN_INFO, file, ensure_ascii=False, indent=2)
     draw_table3_date_fe_full(
         results,
         coefficients,
@@ -928,4 +999,7 @@ def main() -> list[Path]:
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="读取指定面板，估计表3加入日期固定效应版本。")
+    parser.add_argument("--panel", type=Path, default=None, help="最终面板路径；省略时沿用顶部默认输入和输出。")
+    cli_args = parser.parse_args()
+    main(panel_path=cli_args.panel)

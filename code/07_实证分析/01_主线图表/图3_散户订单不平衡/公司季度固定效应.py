@@ -1,6 +1,7 @@
 """独立运行图3的公司季度固定效应口径，不触发另一张图。
 
 样本、窗口、缩尾和估计保持原合并脚本口径；仅重画时读取本任务目录已有结果。
+指定输入面板时，从同名摘要识别口径，并将结果保存到对应口径目录。
 本文件的主函数返回生成文件路径，导入时不读取研究数据或写文件。
 """
 
@@ -33,9 +34,13 @@ from 图2图3_公司季度固定效应 import main as run_figure
 
 def main(argv=None) -> list[Path]:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--panel", type=Path,
+        help="最终面板文件路径；指定后读取同名口径摘要，未指定时沿用原默认面板。",
+    )
     parser.add_argument("--plot-only", action="store_true", default=None, help="只从本任务已有完整数值结果重画。")
     args = parser.parse_args(argv)
-    return run_figure(3, plot_only=args.plot_only)
+    return run_figure(3, plot_only=args.plot_only, panel_path=args.panel)
 
 
 if __name__ == "__main__":
