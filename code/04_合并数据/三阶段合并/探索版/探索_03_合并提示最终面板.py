@@ -430,10 +430,11 @@ def baseline_regression_sample_mask(
 # %% 02. 选择要检查的提示口径并读取事件表
 CURRENT_DEFINITION = "size90"
 CURRENT_TOP_N = None
+CURRENT_INDUSTRY_CUE_CLEANED = False
 paths = build_stage_paths(PROJECT_ROOT)
 EVENT_ROOT = stage_root(PROJECT_ROOT) / EVENT_ROOT_NAME
 CURRENT_LABEL = (
-    f"行业前{CURRENT_TOP_N}名"
+    f"行业前{CURRENT_TOP_N}名_提示公司{'已清洗' if CURRENT_INDUSTRY_CUE_CLEANED else '未清洗'}"
     if CURRENT_DEFINITION == "industry_top"
     else CURRENT_DEFINITION
 )
@@ -474,6 +475,9 @@ if event_info["cue_definition"] != CURRENT_DEFINITION:
 
 if event_info["industry_top_n"] != CURRENT_TOP_N:
     raise ValueError("事件摘要的行业名额与当前选择不一致。")
+
+if CURRENT_DEFINITION == "industry_top" and event_info.get("industry_cue_cleaned") != CURRENT_INDUSTRY_CUE_CLEANED:
+    raise ValueError("事件摘要的提示公司清洗口径与当前选择不一致。")
 
 if Path(event_info["event_path"]).resolve() != EVENT_PATH.resolve():
     raise ValueError("事件摘要对应的事件文件与当前选择不一致。")

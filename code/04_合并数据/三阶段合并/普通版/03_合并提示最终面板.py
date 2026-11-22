@@ -1869,11 +1869,11 @@ def write_final_panel(
         int(top_n) if top_n is not None else pd.NA
     )
 
-    label = (
-        f"行业前{top_n}名"
-        if definition == "industry_top"
-        else definition
-    )
+    if definition == "industry_top":
+        policy_label = "已清洗" if event_info.get("industry_cue_cleaned") else "未清洗"
+        label = f"行业前{top_n}名_提示公司{policy_label}"
+    else:
+        label = definition
 
     folder = (
         stage_root(root)
@@ -1935,6 +1935,7 @@ def finish_one_definition(
     event_path: Path,
     definition: str,
     top_n: int | None,
+    cue_policy: str | None = None,
 ) -> dict:
     # 先核对第二阶段摘要，再读取事件表和日度大表。
     event_summary_path = event_path.with_name("提示事件审计摘要.json")
@@ -1962,6 +1963,9 @@ def finish_one_definition(
 
     if event_info["industry_top_n"] != top_n:
         raise ValueError("事件摘要的行业名额与当前选择不一致。")
+
+    if definition == "industry_top" and event_info.get("industry_cue_cleaned") != (cue_policy == "clean"):
+        raise ValueError("事件摘要的提示公司清洗口径与当前选择不一致。")
 
     if Path(event_info["event_path"]).resolve() != event_path.resolve():
         raise ValueError("事件摘要对应的事件文件与当前选择不一致。")
@@ -2000,15 +2004,21 @@ def main() -> dict:
 
     # 同一种被解释变量口径，分别处理五种提示口径。
     definitions = [
-        ("size90", None, event_root / "size90/提示事件.csv"),
-        ("size95", None, event_root / "size95/提示事件.csv"),
-        ("hs300", None, event_root / "hs300/提示事件.csv"),
-        ("industry_top", 4, event_root / "行业前4名/提示事件.csv"),
-        ("industry_top", 5, event_root / "行业前5名/提示事件.csv"),
+        ("size90", None, event_root / "size90/提示事件.csv", None),
+        ("size95", None, event_root / "size95/提示事件.csv", None),
+        ("hs300", None, event_root / "hs300/提示事件.csv", None),
+        ("industry_top", 2, event_root / "行业前2名_提示公司未清洗/提示事件.csv", "unclean"),
+        ("industry_top", 2, event_root / "行业前2名_提示公司已清洗/提示事件.csv", "clean"),
+        ("industry_top", 4, event_root / "行业前4名_提示公司未清洗/提示事件.csv", "unclean"),
+        ("industry_top", 4, event_root / "行业前4名_提示公司已清洗/提示事件.csv", "clean"),
+        ("industry_top", 5, event_root / "行业前5名_提示公司未清洗/提示事件.csv", "unclean"),
+        ("industry_top", 5, event_root / "行业前5名_提示公司已清洗/提示事件.csv", "clean"),
+        ("industry_top", 10, event_root / "行业前10名_提示公司未清洗/提示事件.csv", "unclean"),
+        ("industry_top", 10, event_root / "行业前10名_提示公司已清洗/提示事件.csv", "clean"),
     ]
 
     # 开始计算前，检查各口径的事件表和摘要是否齐全。
-    for definition, top_n, event_path in definitions:
+    for definition, top_n, event_path, cue_policy in definitions:
         if not event_path.is_file():
             raise FileNotFoundError(
                 f"缺少第二阶段提示事件表：{event_path}"
@@ -2024,9 +2034,9 @@ def main() -> dict:
 
     results = [
         finish_one_definition(
-            root, paths, event_path, definition, top_n
+            root, paths, event_path, definition, top_n, cue_policy
         )
-        for definition, top_n, event_path in definitions
+        for definition, top_n, event_path, cue_policy in definitions
     ]
 
     # 运行索引按被解释变量口径分别保存。

@@ -36,6 +36,7 @@ def build_input_paths(root: Path) -> dict:
         "TRD_Cale_td_path": root / "中间结果/01_清洗后样本/市场交易日历_td.csv",
         "hs300_membership_path": root / "中间结果/02_变量构造结果/9指数成分股/沪深300/沪深300_历史成分区间.csv",
         "industry_path": root / "中间结果/02_变量构造结果/同行业识别/个股行业代码完整面板_RESSET补缺.csv",
+        "industry_rank_path": root / "中间结果/02_变量构造结果/行业提示资格/日度行业市值排名面板.csv",
         "eligibility_path": root / "中间结果/01_清洗后样本/基础清洗后个股日度样本索引_td.csv",
     }
 
@@ -233,35 +234,16 @@ def stop_with_audit(data, audit_dir, filename, message):
 
 
 def load_industry_daily_panel(root, wanted, chunk_size=250_000):
-    """一次分块核对正式资格面板，仅保留本次需要的公司日；不重算排名。"""
-    folder = Path(root) / "中间结果/02_变量构造结果/行业提示资格"
-    panel_path = folder / "行业前4前5_日度资格面板.csv"
-    summary_path = folder / "日度资格面板_构造摘要.json"
-    if not panel_path.is_file() or not summary_path.is_file():
-        raise FileNotFoundError(f"缺少行业日度资格面板或完成摘要：{folder}")
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    if summary.get("complete") is not True or summary.get("version") != "industry_daily_eligibility_v1":
-        raise ValueError("行业日度资格面板未完成或版本不符，请先运行资格准备脚本。")
-    columns = [
-        "Stkcd", "td", "Trddt", "size", "sizew", "IndustryCode", "industryGroup",
-        "industryStatus", "industrySourceStandard", "industryRank", "industryRankMax",
-        "industryN", "rankingEligible", "isIndTop4", "isIndTop5",
-    ]
+    """一次分块读取新的日度行业排名面板，仅保留所需公司日。"""
+    panel_path = Path(root) / "中间结果/02_变量构造结果/行业提示资格/日度行业市值排名面板.csv"
+    if not panel_path.is_file():
+        raise FileNotFoundError(f"缺少日度行业市值排名面板：{panel_path}")
+    columns = ["Stkcd", "td", "Trddt", "IndustryCode", "industryGroup", "size", "industryRank", "baseSampleEligible"]
     header = pd.read_csv(panel_path, nrows=0, encoding="utf-8-sig").columns.tolist()
-    if header != columns or summary.get("columns") != columns:
-        raise ValueError("行业日度资格面板的字段或排列顺序与完成摘要不一致。")
-    if summary.get("key_order") != ["td", "Stkcd"]:
-        raise ValueError("行业日度资格面板必须按交易日序号、股票代码升序保存。")
-    if type(summary.get("rows")) is not int or summary["rows"] <= 0:
-        raise ValueError("行业日度资格面板摘要的行数缺失或无效。")
+    if header != columns:
+        raise ValueError("日度行业市值排名面板字段或排列顺序不符。")
     panel_stat = panel_path.stat()
     file_state = {"size": panel_stat.st_size, "mtime_ns": panel_stat.st_mtime_ns}
-    if summary.get("panel_file") != file_state:
-        raise ValueError("行业日度资格面板与完成摘要不属于同一次完整输出。")
-    begin = pd.to_datetime(summary.get("begin"), errors="coerce")
-    finish = pd.to_datetime(summary.get("finish"), errors="coerce")
-    if pd.isna(begin) or pd.isna(finish) or begin > finish:
-        raise ValueError("行业日度资格面板摘要缺少有效覆盖日期。")
     wanted = wanted[["Stkcd", "td", "Trddt"]].drop_duplicates().copy()
     wanted["Stkcd"] = wanted["Stkcd"].astype("string")
     wanted["td"] = pd.to_numeric(wanted["td"], errors="raise")
@@ -273,11 +255,9 @@ def load_industry_daily_panel(root, wanted, chunk_size=250_000):
     )
     if invalid.any() or wanted.duplicated(["Stkcd", "td"]).any():
         raise ValueError("待匹配的行业资格公司日键无效，或同一序号对应多个日期。")
-    if not wanted["Trddt"].between(begin, finish).all():
-        raise ValueError("行业资格面板覆盖期不足，不能判断所需事件日或事件前第3交易日资格。")
     wanted["td"] = wanted["td"].astype("int64")
-    string_columns = ["Stkcd", "IndustryCode", "industryGroup", "industryStatus", "industrySourceStandard"]
-    numeric_columns = ["td", "size", "sizew", "industryRank", "industryRankMax", "industryN", "rankingEligible", "isIndTop4", "isIndTop5"]
+    string_columns = ["Stkcd", "IndustryCode", "industryGroup", "baseSampleEligible"]
+    numeric_columns = ["td", "size", "industryRank", "baseSampleEligible"]
     parts = []
     row_count = 0
     previous_key = None
@@ -292,12 +272,12 @@ def load_industry_daily_panel(root, wanted, chunk_size=250_000):
         chunk["Trddt"] = pd.to_datetime(chunk["Trddt"], errors="raise")
         for column in numeric_columns:
             chunk[column] = pd.to_numeric(chunk[column], errors="raise")
-            if column not in {"size", "sizew"} and (~np.isfinite(chunk[column].dropna())).any():
+            if column not in {"size"} and (~np.isfinite(chunk[column].dropna())).any():
                 raise ValueError(f"行业日度资格面板的{column}（数值字段）包含无穷值。")
         invalid_key = (
             ~chunk["Stkcd"].str.fullmatch(r"[0-9]{6}", na=False)
             | chunk["td"].isna() | chunk["td"].mod(1).ne(0)
-            | chunk["Trddt"].isna() | ~chunk["Trddt"].between(begin, finish)
+            | chunk["Trddt"].isna()
         )
         if invalid_key.any():
             raise ValueError("行业日度资格面板含无效键或覆盖期以外的日期。")
@@ -312,35 +292,18 @@ def load_industry_daily_panel(root, wanted, chunk_size=250_000):
             raise ValueError("行业日度资格面板的同一交易日序号对应多个日期。")
         previous_key = (int(chunk["td"].iloc[-1]), str(chunk["Stkcd"].iloc[-1]))
         previous_date = chunk["Trddt"].iloc[-1]
-        for column in ["rankingEligible", "isIndTop4", "isIndTop5"]:
-            if (chunk[column].notna() & ~chunk[column].isin([0, 1])).any():
-                raise ValueError(f"行业日度资格面板的{column}（资格标记）不是0、1或缺失。")
+        if (chunk["baseSampleEligible"].notna() & ~chunk["baseSampleEligible"].isin([0, 1])).any():
+            raise ValueError("日度行业市值排名面板的基础样本资格不是0、1或缺失。")
         rank = chunk["industryRank"]
-        rank_max = chunk["industryRankMax"]
-        invalid_rank = rank.isna().ne(rank_max.isna()) | (rank.notna() & (rank.lt(1) | rank.mod(1).ne(0) | rank_max.mod(1).ne(0) | rank_max.lt(rank)))
-        invalid_rank |= chunk["industryN"].notna() & (chunk["industryN"].lt(1) | chunk["industryN"].mod(1).ne(0))
+        invalid_rank = rank.notna() & (rank.lt(1) | rank.mod(1).ne(0))
         if invalid_rank.any():
-            raise ValueError("行业日度资格面板的排名上下界无效。")
-        eligible = chunk["rankingEligible"].eq(1)
-        if (eligible & (chunk["size"].isna() | ~np.isfinite(chunk["size"]) | chunk["size"].le(0))).any():
-            raise ValueError("行业排名基础资格为1的公司日缺少有效总市值。")
-        for top_n in (4, 5):
-            column = f"isIndTop{top_n}"
-            expected = pd.Series(pd.NA, index=chunk.index, dtype="Int8")
-            expected.loc[chunk["rankingEligible"].eq(0)] = 0
-            expected.loc[eligible & rank_max.le(top_n)] = 1
-            expected.loc[eligible & rank.gt(top_n)] = 0
-            mismatch = chunk[column].isna().ne(expected.isna()) | (chunk[column].notna() & chunk[column].ne(expected).fillna(False))
-            if mismatch.any():
-                raise ValueError(f"行业日度资格面板的前{top_n}资格与排名上下界不一致。")
+            raise ValueError("日度行业市值排名面板的行业名次无效。")
         matched = chunk.merge(wanted, on=["Stkcd", "td", "Trddt"], how="inner", validate="1:1")
         if not matched.empty:
             parts.append(matched)
-    if row_count != summary["rows"]:
-        raise ValueError("行业日度资格面板实际行数与完成摘要不一致。")
     current_stat = panel_path.stat()
     if {"size": current_stat.st_size, "mtime_ns": current_stat.st_mtime_ns} != file_state:
-        raise ValueError("读取期间行业日度资格面板发生变化，请重新运行。")
+        raise ValueError("读取期间日度行业市值排名面板发生变化，请重新运行。")
     return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=columns)
 
 
@@ -384,13 +347,14 @@ print("候选公司对：", candidates.shape)
 display(candidates.head())
 
 
-# %% 02. 选择当前口径；行业排名口径还需将名额设为4或5
+# %% 02. 选择当前口径；行业排名口径可切换提示公司清洗状态
 CURRENT_DEFINITION = "size95"  # 当前提示口径：市值95分位
 CURRENT_TOP_N = None          # 行业名额：此口径不使用
+INDUSTRY_CUE_CLEANED = False  # 行业提示公司是否要求基础样本资格
 if CURRENT_DEFINITION not in {"size90", "size95", "hs300", "industry_top"}:
     raise ValueError("提示口径只能为市值90分位、市值95分位、沪深300或行业排名。")
-if CURRENT_DEFINITION == "industry_top" and CURRENT_TOP_N not in (4, 5):
-    raise ValueError("行业排名口径的每行业入选名额必须为4或5。")
+if CURRENT_DEFINITION == "industry_top" and CURRENT_TOP_N not in (2, 4, 5, 10):
+    raise ValueError("行业排名口径的每行业入选名额必须为2、4、5或10。")
 mm = candidates.copy()
 
 
@@ -418,37 +382,20 @@ if CURRENT_DEFINITION == "industry_top":
         stop_with_audit(wanted.loc[wanted["Trddt"].isna()], audit_dir, "排名日期缺少交易日历.csv", "排名日不在统一交易日历中")
     ranked = match_industry_daily_rows(
         wanted, industry_daily,
-        ["Stkcd", "td", "Trddt", "size", "sizew", "IndustryCode", "industryGroup", "industryStatus", "industrySourceStandard", "industryRank", "industryRankMax", "industryN", "rankingEligible", "isIndTop4", "isIndTop5"],
+        ["Stkcd", "td", "Trddt", "size", "IndustryCode", "industryGroup", "industryRank", "baseSampleEligible"],
     )
     missing = ranked["_merge"].ne("both")
-    unknown = ~ranked["rankingEligible"].isin([0, 1])
-    eligible = ranked["rankingEligible"].eq(1)
-    # 行业待定可以暂时没有名次；完成公司对筛选后才检查它是否影响实际提示。
-    # industryN 只计已确定行业的公司；最差可能名次可超过这个数字。
-    rank = ranked["industryRank"]
-    rank_max = ranked["industryRankMax"]
-    known_industry = ranked["industryStatus"].eq("valid").fillna(False)
-    incomplete_bounds = rank.isna() ^ rank_max.isna()
-    invalid_bounds = rank.notna() & (
-        rank.lt(1) | rank_max.lt(rank)
-        | (known_industry & (ranked["industryN"].isna() | rank.gt(ranked["industryN"])))
+    invalid_rank = ranked["industryRank"].notna() & (
+        ranked["industryRank"].lt(1) | ranked["industryRank"].mod(1).ne(0)
     )
-    invalid_rank = eligible & (
-        incomplete_bounds | invalid_bounds.fillna(False)
-        | ranked["size"].isna() | ranked["size"].le(0)
-    )
-    bad = missing | unknown | invalid_rank.fillna(False)
-    if bad.any():
-        stop_with_audit(ranked.loc[bad], audit_dir, "提示公司排名缺失或无效.csv", "提示公司排名数据不完整，不能将未知提示资格补成0")
+    if (missing | invalid_rank.fillna(False)).any():
+        stop_with_audit(ranked.loc[missing | invalid_rank.fillna(False)], audit_dir, "提示公司排名缺失或无效.csv", "实际线索的行业排名数据无效")
     ranked = ranked.drop(columns="_merge").rename(columns={
         "td": "td_tm3", "Trddt": "rankingDate", "size": "mktcap_tm3",
-        "sizew": "float_mktcap_tm3", "IndustryCode": "rankingIndustryCode",
-        "industryGroup": "rankingIndustryGroup", "industryStatus": "rankingIndustryStatus",
-        "industrySourceStandard": "rankingIndustrySourceStandard",
+        "IndustryCode": "rankingIndustryCode", "industryGroup": "rankingIndustryGroup",
+        "industryRank": "rankingIndustryRank", "baseSampleEligible": "rankingBaseSampleEligible",
     })
-    # 已知基础资格为0的记录允许排名缺失，但其主提示资格必须为0。
     mm = mm.merge(ranked, on=["Stkcd", "td_tm3"], how="left", validate="m:1")
-    mm = mm.loc[mm["rankingEligible"].eq(1)].copy()
     # 欣泰退于2017-08-28终止上市；经核对，剔除当天作为提示公司的候选公司对。
     delisted_cue_event = (
         mm["Stkcd"].eq("300372")
@@ -491,49 +438,40 @@ if CURRENT_DEFINITION == "industry_top":
     wanted = pd.concat([cue_keys, recall_keys], ignore_index=True).drop_duplicates()
     industry = match_industry_daily_rows(
         wanted, industry_daily,
-        ["Stkcd", "td", "Trddt", "IndustryCode", "industryGroup", "industryStatus", "industrySourceStandard"],
+        ["Stkcd", "td", "Trddt", "IndustryCode", "industryGroup"],
     )
-    valid = industry["industryStatus"].eq("valid") & industry["industryGroup"].notna()
-    coarse = (
-        industry["industryStatus"].eq("unresolved_coarse")
-        & industry["IndustryCode"].str.fullmatch(r"C[0-9]", na=False)
-    )
-    # 粗码能限定可能的行业分支；其他不明代码没有可可靠判断的分支。
+    valid = industry["industryGroup"].notna()
+    coarse = industry["industryGroup"].isna() & industry["IndustryCode"].str.fullmatch(r"C[0-9]", na=False)
     industry["industryBranch"] = industry["industryGroup"].str[:2].where(valid)
     industry.loc[coarse, "industryBranch"] = industry.loc[coarse, "IndustryCode"]
-    bad = industry["_merge"].ne("both") | (industry["industryStatus"].eq("valid") & ~valid)
+    bad = industry["_merge"].ne("both") | industry["IndustryCode"].isna() | (~valid & ~coarse)
     if bad.any():
-        stop_with_audit(industry.loc[bad], audit_dir, "事件日公司对行业待核对.csv", "事件日行业记录缺失或已标记有效却没有行业大类")
+        audit_path = Path(audit_dir) / "事件日公司对行业待核对.csv"
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        industry.loc[bad].to_csv(audit_path, index=False, encoding="utf-8-sig", date_format="%Y-%m-%d")
+        print(f"删除事件日行业记录缺失或无法归并的公司日：{int(bad.sum()):,}条。核对清单：{audit_path}", flush=True)
+        industry = industry.loc[~bad].copy()
     industry = industry.drop(columns=["_merge", "Trddt"])
-    cue_industry = industry.rename(columns={"td": "event_td", "IndustryCode": "cueIndustryCode", "industryGroup": "cueIndustryGroup", "industryStatus": "cueIndustryStatus", "industrySourceStandard": "cueIndustrySourceStandard", "industryBranch": "cueIndustryBranch"})
-    recall_industry = industry.rename(columns={"Stkcd": "StkcdRecall", "td": "event_td", "IndustryCode": "recallIndustryCode", "industryGroup": "recallIndustryGroup", "industryStatus": "recallIndustryStatus", "industrySourceStandard": "recallIndustrySourceStandard", "industryBranch": "recallIndustryBranch"})
+    cue_industry = industry.rename(columns={"td": "event_td", "IndustryCode": "cueIndustryCode", "industryGroup": "cueIndustryGroup", "industryBranch": "cueIndustryBranch"})
+    recall_industry = industry.rename(columns={"Stkcd": "StkcdRecall", "td": "event_td", "IndustryCode": "recallIndustryCode", "industryGroup": "recallIndustryGroup", "industryBranch": "recallIndustryBranch"})
     mm = mm.merge(cue_industry, on=["Stkcd", "event_td"], how="left", validate="m:1")
     mm = mm.merge(recall_industry, on=["StkcdRecall", "event_td"], how="left", validate="m:1")
-    both_valid = mm["cueIndustryStatus"].eq("valid") & mm["recallIndustryStatus"].eq("valid")
+    both_valid = mm["cueIndustryGroup"].notna() & mm["recallIndustryGroup"].notna()
     different_branch = (
         mm["cueIndustryBranch"].notna() & mm["recallIndustryBranch"].notna()
         & mm["cueIndustryBranch"].ne(mm["recallIndustryBranch"])
     ).fillna(False)
     uncertain = (~both_valid & ~different_branch).fillna(True)
     if uncertain.any():
-        stop_with_audit(mm.loc[uncertain], audit_dir, "事件日公司对行业待核对.csv", "事件日公司对可能同业也可能异业，无法确定是否应排除")
+        audit_path = Path(audit_dir) / "事件日公司对行业待核对.csv"
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        mm.loc[uncertain].to_csv(audit_path, index=False, encoding="utf-8-sig", date_format="%Y-%m-%d")
+        print(f"删除事件日无法确认异业的公司对：{int(uncertain.sum()):,}条。核对清单：{audit_path}", flush=True)
+        mm = mm.loc[~uncertain].copy()
     same_industry = (both_valid & mm["cueIndustryGroup"].eq(mm["recallIndustryGroup"])).fillna(False)
     print(f"归并行业相同的公司对：{int(same_industry.sum()):,}；过滤前：{len(mm):,}。", flush=True)
     mm = mm.loc[~same_industry].copy()
-    top_ns = (int(CURRENT_TOP_N),)
-    eligible = mm["rankingEligible"].eq(1)
-    unknown = mm["industryRank"].isna() | mm["industryRankMax"].isna()
-    for top_n in top_ns:
-        unknown |= mm["industryRank"].le(top_n) & mm["industryRankMax"].gt(top_n)
-        unknown |= ~mm[f"isIndTop{top_n}"].isin([0, 1])
-    unknown = eligible & unknown.fillna(True)
-    if unknown.any():
-        columns = [
-            "Stkcd", "StkcdRecall", "event_Trddt", "rankingDate", "rankingIndustryCode",
-            "rankingIndustryGroup", "rankingIndustryStatus",
-            "industryRank", "industryRankMax", "industryN", "mktcap_tm3",
-        ]
-        stop_with_audit(mm.loc[unknown, columns].drop_duplicates(), audit_dir, "提示公司行业名次待核对.csv", "实际线索的行业排名不确定，可能改变前四或前五资格")
+    # 行业排名缺失的提示公司在主资格中记为0，不向后递补。
 else:
     if CURRENT_DEFINITION == "hs300":
         membership_path = paths["hs300_membership_path"]
@@ -742,9 +680,11 @@ display(mm.head())
 # %% 04. 构造主提示资格和真实市值辅助组
 if CURRENT_DEFINITION == "industry_top":
     top_n = int(CURRENT_TOP_N)
-    eligible = mm["rankingEligible"].eq(1)
-    # 主提示资格直接使用独立日度面板中的前4或前5标记。
-    mm["mainCueEligible"] = mm[f"isIndTop{top_n}"].astype("int8")
+    rank_eligible = mm["rankingIndustryRank"].notna() & mm["rankingIndustryRank"].le(top_n)
+    if INDUSTRY_CUE_CLEANED:
+        rank_eligible &= mm["rankingBaseSampleEligible"].eq(1)
+    mm["mainCueEligible"] = rank_eligible.fillna(False).astype("int8")
+    eligible = mm["rankingIndustryRank"].notna() & mm["mktcap_tm3"].gt(0)
     mm["size90plus"] = (eligible & (mm["mktcap_tm3"] > mm["marketCap_90th_percentile"])).astype("int8")
     mm["size50_90"] = (eligible & (mm["mktcap_tm3"] > mm["marketCap_50th_percentile"]) & (mm["mktcap_tm3"] <= mm["marketCap_90th_percentile"])).astype("int8")
     mm["size10_50"] = (eligible & (mm["mktcap_tm3"] >= mm["marketCap_10th_percentile"]) & (mm["mktcap_tm3"] <= mm["marketCap_50th_percentile"])).astype("int8")
@@ -1254,6 +1194,7 @@ summary = {
         "size95": 0.95,
     }.get(CURRENT_DEFINITION),
     "industry_top_n": CURRENT_TOP_N,
+    "industry_cue_cleaned": INDUSTRY_CUE_CLEANED if CURRENT_DEFINITION == "industry_top" else None,
     "grain": "StkcdRecall × date",
     "rows": int(len(events)),
     "eligible_pair_rows": int(len(cue_pairs)),
