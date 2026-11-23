@@ -1,13 +1,14 @@
-"""分别估计行业前4、前5提示的两种收益窗口、六种回归规格。
+"""估计行业前2、前4、前5、前10提示的收益回归，区分提示公司清洗口径。
 
 输入为已经构造完成的行业提示面板，本文件不调用排名或面板构建入口。
-两个窗口为[t,t+1]和[t,t+10]；每个门槛共12个模型。收益直接使用
+两个窗口为[t,t+1]和[t,t+10]，每组门槛和清洗口径共12个模型。收益直接使用
 已有缩尾列；标准误按被提示公司和事件起点日期双向聚类。
 
-正式输出位于“图表结果/05_行业排名提示检验/回归结果/行业前N名”。
+正式输出在“图表结果/05_行业排名提示检验”下，按收益口径、筛样规格、
+行业门槛及提示公司清洗口径分别保存。
 模型汇总的系数、标准误和置信区间均为百分点；系数明细同时保留小数和百分点列。
 逐模型保存核对摘要及两张结果表，相同输入和估计口径可继续未完成模型。
-每个门槛的12个模型完成后，按主回归样式生成紧凑版及两页完整系数表图片。
+每个口径的12个模型完成后，按主回归样式生成紧凑版及两页完整系数表图片。
 已有12个同口径模型时再次运行，会恢复结果并重新出图，不重新估计这些模型。
 计算提速不改变估计口径时保留旧模型，并逐模型记录原计算实现的来源。
 核对摘要是完整模型的权威快照，写表中断时可从摘要恢复结果表。
@@ -18,15 +19,19 @@ from __future__ import annotations
 
 import csv
 import hashlib
+from itertools import product
 import json
 import math
 from pathlib import Path
 import sys
 
 
-# 一、集中修改运行设置；两种提示分别估计，不同时放入一个模型。
+# 一、集中修改运行设置。每组门槛和提示公司清洗口径分别估计。
 # TOP_NS（每行业入选名额）；START_YEAR、END_YEAR（起止年份）。
-TOP_NS = (4, 5)
+TOP_NS = (2, 4, 5, 10)
+INDUSTRY_CUE_POLICIES = ("unclean", "clean")  # 提示公司未清洗、已清洗。
+RETURN_DEFINITION = "self_built_labels"  # 自算标签收益，official_labels 为官方标签收益。
+SAMPLE_SPEC = 5  # 三阶段合并的筛样规格，可选 5 或 6。
 START_YEAR = 2005
 END_YEAR = 2025
 # CHUNK_SIZE（每次读取行数）；只影响缓存准备时的内存占用。
@@ -57,40 +62,49 @@ def implementation_source(settings: dict) -> dict:
 
 
 def validate_settings() -> None:
-    """只接受本实验已准备的前4、前5，避免误读其他门槛文件。"""
-    if not TOP_NS or any(type(n) is not int or n not in (4, 5) for n in TOP_NS):
-        raise ValueError("每行业入选名额只能填写(4,)、(5,)或(4, 5)。")
+    """核对可编辑的运行设置。"""
+    if not TOP_NS or any(type(n) is not int or n not in common.TOP_NS for n in TOP_NS):
+        raise ValueError("每行业入选名额只能填写2、4、5或10。")
     if len(set(TOP_NS)) != len(TOP_NS):
         raise ValueError("每行业入选名额不能重复。")
+    if not INDUSTRY_CUE_POLICIES or any(
+        policy not in common.CUE_POLICIES for policy in INDUSTRY_CUE_POLICIES
+    ):
+        raise ValueError("提示公司清洗口径可选未清洗或已清洗。")
+    if len(set(INDUSTRY_CUE_POLICIES)) != len(INDUSTRY_CUE_POLICIES):
+        raise ValueError("提示公司清洗口径不能重复。")
+    if RETURN_DEFINITION not in common.RETURN_LABELS:
+        raise ValueError("收益口径可选自算标签收益或官方标签收益。")
+    if type(SAMPLE_SPEC) is not int or SAMPLE_SPEC not in common.SAMPLE_SPECS:
+        raise ValueError("合并筛样规格只能填写5或6。")
     if type(START_YEAR) is not int or type(END_YEAR) is not int or START_YEAR > END_YEAR:
         raise ValueError("起止年份必须为整数，且起始年份不能晚于结束年份。")
     if type(CHUNK_SIZE) is not int or CHUNK_SIZE < 1:
         raise ValueError("分块读取行数必须为正整数。")
 
 
-def validate_model(model: dict, top_n: int, input_id: str) -> tuple[int, int]:
+def validate_model(model: dict, settings: dict) -> tuple[int, int]:
     """逐项检查可恢复的模型，缺少明细的模型不视为已经完成。"""
     summary = model.get("summary")
     coefficients = model.get("coefficients")
     if not isinstance(summary, dict) or not isinstance(coefficients, list) or not coefficients:
         raise ValueError("已保存模型缺少模型汇总或系数明细，不能继续计算。")
-    required = {
-        "行业前几名", "提示变量", "窗口序号", "规格", "线索系数", "聚类标准误",
-        "p值", "回归样本量", "残差自由度", "结果单位", "输入签名", "模型状态",
-    }
+    matching_fields = (
+        "行业前几名", "提示公司清洗口径", "提示变量", "收益口径", "合并筛样规格",
+        "输入签名", "结果单位",
+    )
+    required = {"窗口序号", "规格", "线索系数", "聚类标准误", "p值",
+                "回归样本量", "残差自由度", "模型状态", *matching_fields}
     if required - summary.keys():
         raise ValueError(f"模型汇总缺少字段：{sorted(required - summary.keys())}")
     horizon, spec_id = summary["窗口序号"], summary["规格"]
     if horizon not in HORIZONS or spec_id not in SPEC_IDS:
         raise ValueError("已保存模型包含本次任务以外的窗口或规格。")
-    if (
-        summary["行业前几名"] != top_n
-        or summary["提示变量"] != f"quarterLag1IndTop{top_n}"
-        or summary["输入签名"] != input_id
-        or summary["结果单位"] != "百分点"
-        or summary["模型状态"] != "完成"
-    ):
-        raise ValueError("已保存模型的行业门槛、提示变量、输入签名或完成状态不符。")
+    for field in matching_fields:
+        if summary[field] != settings[field]:
+            raise ValueError(f"已保存模型的{field}与本次设置不符。")
+    if summary["模型状态"] != "完成":
+        raise ValueError("已保存模型的状态须为完成。")
     for name in ("线索系数", "聚类标准误", "p值", "回归样本量", "残差自由度"):
         value = summary[name]
         if value is None or not math.isfinite(float(value)):
@@ -100,11 +114,16 @@ def validate_model(model: dict, top_n: int, input_id: str) -> tuple[int, int]:
     if not 0 <= summary["p值"] <= 1:
         raise ValueError("模型显著性概率不在零至一之间。")
     variables = []
+    detail_fields = (
+        "行业前几名", "提示公司清洗口径", "收益口径", "合并筛样规格",
+        "输入签名", "窗口序号", "规格",
+    )
     for row in coefficients:
         if not isinstance(row, dict) or not row.get("变量"):
             raise ValueError("系数明细缺少变量名称。")
-        if any(row.get(key) != summary[key] for key in ("行业前几名", "窗口序号", "规格")):
-            raise ValueError("系数明细的行业、窗口或规格与模型汇总不一致。")
+        for field in detail_fields:
+            if row.get(field) != summary[field]:
+                raise ValueError(f"系数明细的{field}与模型汇总不一致。")
         variables.append(row["变量"])
     if len(variables) != len(set(variables)) or variables.count(summary["提示变量"]) != 1:
         raise ValueError("系数明细存在重复变量，或缺少唯一的行业提示系数。")
@@ -124,7 +143,8 @@ def load_snapshot(path: Path, settings: dict, output_dir: Path) -> list[dict]:
     if not isinstance(saved_settings, dict):
         raise ValueError(f"核对摘要缺少原运行设置：{path}")
     research_fields = (
-        "行业前几名", "起始年份", "结束年份", "窗口终点", "规格",
+        "行业前几名", "提示公司清洗口径", "提示变量", "收益口径", "合并筛样规格",
+        "起始年份", "结束年份", "窗口终点", "规格",
         "输入签名", "缓存签名", "结果单位",
     )
     if any(saved_settings.get(field) != settings[field] for field in research_fields):
@@ -138,7 +158,7 @@ def load_snapshot(path: Path, settings: dict, output_dir: Path) -> list[dict]:
     models = snapshot.get("模型结果")
     if not isinstance(models, list):
         raise ValueError(f"核对摘要缺少可恢复的模型记录：{path}")
-    keys = [validate_model(model, settings["行业前几名"], settings["输入签名"]) for model in models]
+    keys = [validate_model(model, settings) for model in models]
     if len(keys) != len(set(keys)):
         raise ValueError(f"核对摘要中的窗口、规格键重复：{path}")
     if snapshot.get("已完成模型数") != len(models):
@@ -173,7 +193,7 @@ def draw_result_images(root: Path, output_dir: Path, settings: dict, models: lis
     top_n = settings["行业前几名"]
     expected_keys = [(h, s) for h in HORIZONS for s in SPEC_IDS]
     model_lookup = {
-        validate_model(model, top_n, settings["输入签名"]): model
+        validate_model(model, settings): model
         for model in models
     }
     if len(models) != len(expected_keys) or set(model_lookup) != set(expected_keys):
@@ -192,12 +212,15 @@ def draw_result_images(root: Path, output_dir: Path, settings: dict, models: lis
         format_estimate, render_publication_table, variable_label,
     )
 
-    cue = f"quarterLag1IndTop{top_n}"
-    title = f"行业前{top_n}名公司提示与被提示公司收益"
+    cue = settings["提示变量"]
+    policy_label = common.policy_label(settings["提示公司清洗口径"])
+    return_label = common.RETURN_LABELS[settings["收益口径"]]
+    title = f"行业前{top_n}名公司提示与被提示公司收益（{policy_label}）"
     columns = [f"({s})" for s in SPEC_IDS] * len(HORIZONS)
     groups = [(0, 5, "收益窗口 [t, t+1]"), (6, 11, "收益窗口 [t, t+10]")]
     notes = [
-        f"注：样本期为{settings['起始年份']}—{settings['结束年份']}年；提示变量为上一季度每行业市值前{top_n}名公司提示。",
+        f"注：样本期为{settings['起始年份']}—{settings['结束年份']}年，合并筛样规格为{settings['合并筛样规格']}。",
+        f"提示变量为上一季度每行业市值前{top_n}名公司提示。",
         "第（2）列起含自身盈余公告前后各10日及当日的21项控制；第（3）列起另加6项控制。",
         "括号内为按被提示公司和事件起点日期双向聚类的标准误；系数与标准误单位均为百分点。",
         "决定系数为模型汇总中的总体决定系数；星号按原始双侧检验概率计算，未作多重检验调整。",
@@ -235,7 +258,7 @@ def draw_result_images(root: Path, output_dir: Path, settings: dict, models: lis
     compact_path = output_dir / f"行业前{top_n}名_收益回归_紧凑版.png"
     render_publication_table(
         table_number="行业排名提示检验", title=title,
-        subtitle="因变量：被提示公司的特征调整收益率；系数与标准误的单位均为百分点",
+        subtitle=f"因变量为被提示公司的特征调整收益率（{return_label}），系数与标准误的单位均为百分点",
         group_headers=groups, column_labels=columns, rows=compact_rows,
         notes=notes, output_path=compact_path, width=23.0,
         label_right=0.285, body_fontsize=9.0,
@@ -285,22 +308,22 @@ def draw_result_images(root: Path, output_dir: Path, settings: dict, models: lis
         render_publication_table(
             table_number="行业排名提示检验" + ("（续）" if page == 2 else ""),
             title=title,
-            subtitle=f"样本期：{settings['起始年份']}—{settings['结束年份']}年；每行业入选前{top_n}名",
+            subtitle=f"样本期为{settings['起始年份']}—{settings['结束年份']}年，门槛为每行业前{top_n}名",
             group_headers=groups, column_labels=columns, rows=rows,
             notes=notes + (["续见下一页。"] if page == 1 else []),
             output_path=path, width=A4_LANDSCAPE_WIDTH_IN,
             height=A4_LANDSCAPE_HEIGHT_IN, label_right=0.205,
             body_fontsize=8.5, compact_header=True,
-            dependent_variable_header="因变量：被提示公司的特征调整收益率（百分点）",
+            dependent_variable_header=f"因变量为被提示公司的特征调整收益率（{return_label}，百分点）",
         )
         print(f"已保存图片：{path}", flush=True)
 
 
-def check_existing_plot(root: Path, top_n: int, summary: dict) -> None:
+def check_existing_plot(result_dir: Path, label: str, summary: dict) -> None:
     """同口径累计图已存在时，核对第1、10窗与第6列的结果。"""
     if summary["规格"] != 6:
         return
-    path = common.output_root(root) / "累计系数图" / f"行业前{top_n}名_累计系数.csv"
+    path = result_dir / "累计系数图" / f"{label}_累计系数.csv"
     if not path.is_file():
         return
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -318,25 +341,37 @@ def check_existing_plot(root: Path, top_n: int, summary: dict) -> None:
 
 
 def main() -> None:
-    """准备紧凑缓存，核对两套基础键，然后逐模型估计和保存。"""
+    """依次准备每组缓存，逐模型估计和保存。"""
     validate_settings()
     root = common.find_root()
-    print(f"行业提示收益回归：{START_YEAR}—{END_YEAR}年，门槛{TOP_NS}。", flush=True)
+    result_dir = common.result_root(root, RETURN_DEFINITION, SAMPLE_SPEC)
+    print(
+        f"行业提示收益回归，{START_YEAR}—{END_YEAR}年，门槛{TOP_NS}，"
+        f"{common.RETURN_LABELS[RETURN_DEFINITION]}，合并筛样规格{SAMPLE_SPEC}。",
+        flush=True,
+    )
 
     # 二、缓存包含50个累计窗口，供表格与累计图共同使用。
-    # 列表只保留缓存元信息；真正估计时按门槛、模型依次读取，避免同时预载两套数据。
-    caches = [common.prepare_cache(root, n, START_YEAR, END_YEAR, CHUNK_SIZE) for n in TOP_NS]
-    common.verify_base_keys(caches)
+    # 按门槛及清洗口径先后处理，每次只准备本组所用缓存。
     script_hash = file_hash(SCRIPT_PATH)
     helper_hash = file_hash(COMMON_DIR / "行业排名回归公共模块.py")
 
     # 三、同一套回归函数处理六种规格，参数和输入签名控制续算。
-    for top_n, cache in zip(TOP_NS, caches):
-        output_dir = common.output_root(root) / "回归结果" / f"行业前{top_n}名"
+    expected_models = [(h, s) for h in HORIZONS for s in SPEC_IDS]
+    for top_n, cue_policy in product(TOP_NS, INDUSTRY_CUE_POLICIES):
+        label = common.industry_label(top_n, cue_policy)
+        cache = common.prepare_cache(
+            root, top_n, START_YEAR, END_YEAR, CHUNK_SIZE, cue_policy,
+            return_definition=RETURN_DEFINITION, sample_spec=SAMPLE_SPEC,
+        )
+        output_dir = result_dir / "回归结果" / label
         settings = {
             "行业前几名": top_n, "起始年份": START_YEAR, "结束年份": END_YEAR,
             "窗口终点": list(HORIZONS), "规格": list(SPEC_IDS),
             "输入签名": cache["input_id"], "缓存签名": cache["signature"],
+            "提示公司清洗口径": cue_policy,
+            "提示变量": cache["signature"]["cue_column"],
+            "收益口径": RETURN_DEFINITION, "合并筛样规格": SAMPLE_SPEC,
             "入口脚本校验值": script_hash, "公共模块校验值": helper_hash,
             "估计口径版本": common.ENGINE_VERSION,
             "计算实现版本": common.COMPUTATION_VERSION,
@@ -345,12 +380,15 @@ def main() -> None:
         models = load_snapshot(output_dir / "回归核对摘要.json", settings, output_dir)
         completed = {(m["summary"]["窗口序号"], m["summary"]["规格"]) for m in models}
         for model in models:
-            check_existing_plot(root, top_n, model["summary"])
+            check_existing_plot(result_dir, label, model["summary"])
         if models:
             save_results(output_dir, settings, models)
-        pending_models = [(h, s) for h in HORIZONS for s in SPEC_IDS if (h, s) not in completed]
+        pending_models = [key for key in expected_models if key not in completed]
         remaining = set(pending_models)
-        print(f"行业前{top_n}名：已恢复{len(models)}/12个模型，待估计{len(pending_models)}个。", flush=True)
+        print(
+            f"{label}已恢复{len(models)}/{len(expected_models)}个模型，待估计{len(pending_models)}个。",
+            flush=True,
+        )
         # 四、同一规格的两个收益仅在有效样本完全一致时共享解释变量投影。
         # 公共模块可按规格批量计算，每返回一个完整模型仍立即核对并保存。
         for summary, coefficients in common.iter_table_models(cache, pending_models):
@@ -358,19 +396,23 @@ def main() -> None:
                 "summary": summary, "coefficients": coefficients,
                 "实现来源": implementation_source(settings),
             }
-            model_key = validate_model(model, top_n, cache["input_id"])
+            model_key = validate_model(model, settings)
             if model_key not in remaining:
                 raise ValueError("批量估计返回了未请求或重复的窗口、规格。")
-            check_existing_plot(root, top_n, summary)
+            check_existing_plot(result_dir, label, summary)
             models.append(model)
             save_results(output_dir, settings, models)
             remaining.remove(model_key)
-            print(f"已完成{len(models)}/12个模型；提示系数={summary['线索系数']:.6f}个百分点。", flush=True)
+            print(
+                f"已完成{len(models)}/{len(expected_models)}个模型，"
+                f"提示系数为{summary['线索系数']:.6f}个百分点。",
+                flush=True,
+            )
         if remaining:
             raise ValueError(f"批量估计尚有模型未完成：{sorted(remaining)}")
         # 五、完整结果已保存后再绘图；恢复12/12个模型时也从这里补图。
         draw_result_images(root, output_dir, settings, models)
-        print(f"行业前{top_n}名回归完成，结果目录：{output_dir}", flush=True)
+        print(f"{label}回归完成，结果目录为{output_dir}", flush=True)
 
 
 if __name__ == "__main__":

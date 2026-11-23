@@ -1,4 +1,4 @@
-"""行业前4、前5回归的共同数据入口和估计方法。
+"""行业排名提示回归与累计系数图共同使用的数据入口和估计方法。
 
 一行代表“被提示公司×交易日”。只读取已经完成的行业面板，不重建提示、
 收益或缩尾。复用项目工作目录中的季度列缓存，回归残差留在内存，
@@ -38,6 +38,10 @@ from scipy.sparse.csgraph import connected_components
 ENGINE_VERSION = "industry_regression_v1"
 # 数学口径没有变化；计算实现版本单独记录，优化代码不会使已完成模型作废。
 COMPUTATION_VERSION = "memory_grouped_v2"
+TOP_NS = (2, 4, 5, 10)
+CUE_POLICIES = ("unclean", "clean")
+RETURN_LABELS = {"self_built_labels": "自算标签收益", "official_labels": "官方标签收益"}
+SAMPLE_SPECS = (5, 6)
 OWN_EA_COLUMNS = (
     [f"ownEA_tm{j}" for j in range(10, 0, -1)]
     + ["ownEA"] + [f"ownEA_tp{j}" for j in range(1, 11)]
@@ -66,6 +70,20 @@ def find_root() -> Path:
 
 def output_root(root: Path) -> Path:
     return Path(root) / "图表结果/05_行业排名提示检验"
+
+
+def policy_label(cue_policy: str) -> str:
+    if cue_policy not in CUE_POLICIES:
+        raise ValueError("提示公司清洗口径无效。")
+    return "提示公司已清洗" if cue_policy == "clean" else "提示公司未清洗"
+
+
+def industry_label(top_n: int, cue_policy: str) -> str:
+    return f"行业前{top_n}名_{policy_label(cue_policy)}"
+
+
+def result_root(root: Path, return_definition="self_built_labels", sample_spec=5) -> Path:
+    return output_root(root) / RETURN_LABELS[return_definition] / f"筛样规格{sample_spec}"
 
 
 def signature_hash(signature: dict) -> str:
@@ -104,12 +122,13 @@ def _same_input_definition(left: dict, right: dict) -> bool:
 
 def _find_compatible_cache(root: Path, signature: dict) -> dict | None:
     """仅实现变化时复用完工缓存，并优先保留已有结果引用的输入签名。"""
-    top_n = signature["top_n"]
+    label = industry_label(signature["top_n"], signature["cue_policy"])
     folder = Path(root) / "work/行业排名回归/季度缓存"
     preferred = set()
+    results = result_root(root, signature["return_definition"], signature["sample_spec"])
     result_paths = [
-        output_root(root) / f"回归结果/行业前{top_n}名/回归核对摘要.json",
-        output_root(root) / f"累计系数图/行业前{top_n}名_回归核对摘要.json",
+        results / "回归结果" / label / "回归核对摘要.json",
+        results / "累计系数图" / f"{label}_回归核对摘要.json",
     ]
     for path in result_paths:
         if path.is_file():
@@ -118,7 +137,7 @@ def _find_compatible_cache(root: Path, signature: dict) -> dict | None:
             if identity:
                 preferred.add(identity)
     candidates = []
-    pattern = f"行业前{top_n}名_{signature['start_year']}_{signature['end_year']}_*/完成清单.json"
+    pattern = f"{label}_{signature['start_year']}_{signature['end_year']}_*/完成清单.json"
     for path in folder.glob(pattern):
         cached = json.loads(path.read_text(encoding="utf-8"))
         old_signature = cached.get("signature", {})
@@ -181,30 +200,77 @@ def _digest_values(digest, values: np.ndarray) -> None:
 
 # 二、只扫描一次大面板，建立供表和图共同使用的季度列缓存。
 def prepare_cache(root: Path, top_n: int, start_year: int, end_year: int,
-                  chunk_size: int = 250_000) -> dict:
-    if top_n not in (4, 5):
-        raise ValueError("本任务只接受行业前4或前5。")
+                  chunk_size: int = 250_000, cue_policy: str = "unclean", *,
+                  return_definition: str = "self_built_labels", sample_spec: int = 5) -> dict:
+    if top_n not in TOP_NS:
+        raise ValueError("本任务只接受行业前2、前4、前5或前10。")
+    if return_definition not in RETURN_LABELS or sample_spec not in SAMPLE_SPECS:
+        raise ValueError("收益来源或合并筛样规格无效。")
     if not 1900 <= start_year <= end_year <= 2200 or chunk_size < 1:
         raise ValueError("年份范围或分块行数无效。")
     root = Path(root).resolve()
-    folder = root / f"中间结果/04_合并数据/行业排名提示检验/行业前{top_n}名"
-    source = folder / f"行业前{top_n}名_最终回归面板.csv"
-    audit_path = folder / "构造口径与核对摘要.json"
+    label = industry_label(top_n, cue_policy)
+    stage_dir = root / "中间结果/04_合并数据/三阶段合并"
+    folder = stage_dir / "最终面板" / label / RETURN_LABELS[return_definition]
+    source = folder / f"最终回归面板_筛样规格{sample_spec}.csv"
+    audit_path = source.with_suffix(".json")
     if not source.is_file() or not audit_path.is_file():
         raise FileNotFoundError(f"行业前{top_n}名的面板或构造摘要缺失：{folder}")
-    audit = json.loads(audit_path.read_text(encoding="utf-8"))
-    if audit.get("cue_definition") != "industry_top" or audit.get("industry_top_n") != top_n:
-        raise ValueError("面板构造摘要与行业提示定义不一致。")
-    if start_year < audit["start_year"] or end_year > audit["end_year"]:
+    audit_bytes = audit_path.read_bytes()
+    audit = json.loads(audit_bytes)
+    expected = {
+        "stage": 3, "cue_definition": "industry_top", "industry_top_n": top_n,
+        "return_definition": return_definition, "return_label": RETURN_LABELS[return_definition],
+        "regression_sample_spec": sample_spec, "key_duplicate_count": 0,
+    }
+    if any(audit.get(field) != value for field, value in expected.items()):
+        raise ValueError("最终面板摘要的行业定义、收益来源、筛样规格或主键不符。")
+    if Path(audit.get("output_path", "")).resolve() != source.resolve():
+        raise ValueError("最终面板摘要记录的输出路径与所选面板不符。")
+    if any(type(audit.get(field)) is not int or audit[field] <= 0 for field in ("rows", "firms")):
+        raise ValueError("最终面板摘要缺少有效的行数或公司数。")
+    event_audit_hash = None
+    if "industry_cue_cleaned" in audit:
+        saved_cleaned = audit["industry_cue_cleaned"]
+    else:
+        # 已启动的第三阶段使用旧摘要格式，按对应的第二阶段摘要核对口径。
+        event_dir = stage_dir / "提示事件" / label
+        event_audit_path = event_dir / "提示事件审计摘要.json"
+        event_path = event_dir / "提示事件.csv"
+        if (
+            Path(audit.get("event_summary_path", "")).resolve() != event_audit_path.resolve()
+            or Path(audit.get("event_path", "")).resolve() != event_path.resolve()
+        ):
+            raise ValueError("最终面板摘要未关联到对应的第二阶段口径。")
+        event_bytes = event_audit_path.read_bytes()
+        event_audit = json.loads(event_bytes)
+        if (
+            event_audit.get("stage") != 2 or event_audit.get("cue_definition") != "industry_top"
+            or event_audit.get("industry_top_n") != top_n
+            or Path(event_audit.get("event_path", "")).resolve() != event_path.resolve()
+        ):
+            raise ValueError("关联的第二阶段摘要与所选行业口径不符。")
+        saved_cleaned = event_audit.get("industry_cue_cleaned")
+        event_audit_hash = hashlib.sha256(event_bytes).hexdigest()
+    if saved_cleaned is not (cue_policy == "clean"):
+        raise ValueError("面板对应的提示公司清洗口径与所选口径不一致。")
+    audit_start = audit.get("start_year")
+    audit_end = audit.get("end_year")
+    if audit_start is not None and audit_end is not None and not audit_start <= start_year <= end_year <= audit_end:
         raise ValueError("要求的年份超出已完成面板范围，请修改入口参数。")
-    cue_column = f"quarterLag1IndTop{top_n}"
+    cue_column = audit.get("cue_column")
+    if not isinstance(cue_column, str) or not cue_column:
+        raise ValueError("最终面板摘要缺少实际提示变量列名。")
     x_columns = [cue_column, *CONTROLS]
     signature = {
         "version": ENGINE_VERSION,
         "module_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "panel": _file_state(source),
-        "panel_audit_sha256": hashlib.sha256(audit_path.read_bytes()).hexdigest(),
-        "top_n": top_n, "start_year": start_year, "end_year": end_year,
+        "panel_audit_sha256": hashlib.sha256(audit_bytes).hexdigest(),
+        "event_audit_sha256": event_audit_hash,
+        "top_n": top_n, "cue_policy": cue_policy, "cue_column": cue_column,
+        "return_definition": return_definition, "sample_spec": sample_spec,
+        "start_year": start_year, "end_year": end_year,
         "x_columns": x_columns, "returns": RETURN_COLUMNS,
         "numeric_dtype": "float64", "outcome_scale": 100,
         "inference": "主表2含常数的有限样本修正；精确固定效应秩；残差自由度双侧t检验",
@@ -212,7 +278,7 @@ def prepare_cache(root: Path, top_n: int, start_year: int, end_year: int,
     }
     input_id = signature_hash(signature)
     cache_root = root / "work/行业排名回归/季度缓存"
-    cache_path = cache_root / f"行业前{top_n}名_{start_year}_{end_year}_{input_id[:20]}"
+    cache_path = cache_root / f"{label}_{start_year}_{end_year}_{input_id[:20]}"
     manifest_path = cache_path / "完成清单.json"
     compatible = _find_compatible_cache(root, signature)
     if compatible is not None:
@@ -242,7 +308,8 @@ def prepare_cache(root: Path, top_n: int, start_year: int, end_year: int,
         parts.mkdir()
         quarter_parts: dict[int, list[Path]] = {}
         source_rows = selected_rows = cue_days = 0
-        all_firms = set()
+        source_firms, all_firms = set(), set()
+        first_year, last_year = None, None
         dtype = {c: "float64" for c in [*x_columns, *RETURN_COLUMNS, "industryTopN"]}
         dtype.update({c: "string" for c in ["StkcdRecall", "Trddt", "yearQuarter", "cueDefinition"]})
         reader = pd.read_csv(source, usecols=required, dtype=dtype,
@@ -252,22 +319,28 @@ def prepare_cache(root: Path, top_n: int, start_year: int, end_year: int,
             dates = pd.to_datetime(chunk["Trddt"], errors="raise")
             if dates.isna().any() or not dates.eq(dates.dt.normalize()).all():
                 raise ValueError("交易日期缺失或包含非零时分秒。")
-            selected = dates.dt.year.between(start_year, end_year)
+            firms = chunk["StkcdRecall"].str.strip()
+            if not firms.str.fullmatch(r"\d{6}", na=False).all():
+                raise ValueError("被提示公司代码不是六位数字或存在缺失。")
+            if not chunk["cueDefinition"].eq("industry_top").fillna(False).all() or not chunk["industryTopN"].eq(top_n).all():
+                raise ValueError("面板行内的行业提示定义或前几名参数冲突。")
+            if not chunk[cue_column].isin([0, 1]).all():
+                raise ValueError("主提示变量含缺失或非零一取值。")
+            source_firms.update(firms.unique().tolist())
+            date_years = dates.dt.year
+            chunk_first, chunk_last = int(date_years.min()), int(date_years.max())
+            first_year = chunk_first if first_year is None else min(first_year, chunk_first)
+            last_year = chunk_last if last_year is None else max(last_year, chunk_last)
+            selected = date_years.between(start_year, end_year)
             if not selected.any():
                 continue
             chunk = chunk.loc[selected].copy()
             dates = dates.loc[selected]
-            firms = chunk["StkcdRecall"].str.strip()
-            if not firms.str.fullmatch(r"\d{6}").fillna(False).all():
-                raise ValueError("被提示公司代码不是六位数字或存在缺失。")
+            firms = firms.loc[selected]
             quarters = dates.dt.to_period("Q")
             recorded_quarters = pd.to_datetime(chunk["yearQuarter"], errors="raise")
             if recorded_quarters.isna().any() or not recorded_quarters.dt.to_period("Q").eq(quarters).all():
                 raise ValueError("年度季度字段与交易日期不一致。")
-            if not chunk["cueDefinition"].eq("industry_top").fillna(False).all() or not chunk["industryTopN"].eq(top_n).all():
-                raise ValueError("面板行内的行业提示定义或前几名参数冲突。")
-            if not chunk[cue_column].isin([0, 1]).all():
-                raise ValueError("主提示变量含缺失或非零一取值，不能直接补零。")
             firm = firms.to_numpy(dtype="int32")
             day = dates.to_numpy(dtype="datetime64[D]").astype("int32")
             q = quarters.astype("int64").to_numpy()
@@ -284,13 +357,12 @@ def prepare_cache(root: Path, top_n: int, start_year: int, end_year: int,
                 quarter_parts.setdefault(int(quarter), []).append(path)
             print(f"行业前{top_n}名：已扫描{source_rows:,}行", flush=True)
             del chunk, x, y
-        if source_rows != int(audit["panel_rows"]):
-            raise ValueError("面板实际行数与构造摘要不一致，未保留季度缓存。")
+        if source_rows != audit["rows"] or len(source_firms) != audit["firms"]:
+            raise ValueError("面板实际行数或公司数与最终面板摘要不一致。")
         if not selected_rows:
             raise ValueError("指定年份没有可用的公司日观测。")
-        if start_year == audit["start_year"] and end_year == audit["end_year"]:
-            if cue_days != int(audit["cue_firm_days"]) or len(all_firms) != int(audit["panel_firms"]):
-                raise ValueError("提示日数或公司数与面板构造摘要不一致。")
+        if not first_year <= start_year <= end_year <= last_year:
+            raise ValueError("要求的年份超出面板实际覆盖范围。")
         quarters_info = []
         for quarter, paths in sorted(quarter_parts.items()):
             arrays = {name: [] for name in ("firm", "day", "x", "y")}
@@ -331,8 +403,11 @@ def prepare_cache(root: Path, top_n: int, start_year: int, end_year: int,
             del merged, key, order, sorted_key
             gc.collect()
         parts.rmdir()
-        if _file_state(source) != signature["panel"]:
-            raise ValueError("读取过程中源面板发生变化，未保留缓存，请待面板完成后重新运行。")
+        if (
+            _file_state(source) != signature["panel"] or audit_path.read_bytes() != audit_bytes
+            or (event_audit_hash is not None and event_audit_path.read_bytes() != event_bytes)
+        ):
+            raise ValueError("读取过程中源面板或摘要发生变化，请待面板完成后重新运行。")
         result = {
             "signature": signature, "input_id": input_id, "path": str(cache_path),
             "root": str(root), "top_n": top_n, "rows": selected_rows,
@@ -373,24 +448,27 @@ def _validate_cache(cache: dict) -> None:
 
 
 def verify_base_keys(caches: list[dict]) -> None:
-    """同时运行前4、前5时验证基础键、控制与收益一致，以及提示的包含关系。"""
+    """核对同一清洗口径下用于比较的面板及提示包含关系。"""
     if len(caches) < 2:
         return
     reference = caches[0]
     for current in caches[1:]:
+        fields = ("cue_policy", "return_definition", "sample_spec", "start_year", "end_year")
+        if any(reference["signature"][field] != current["signature"][field] for field in fields):
+            raise ValueError("对比的行业档位必须使用相同的清洗、收益、筛样和年份口径。")
         fields = ("quarter", "rows", "key_digest", "base_data_digest")
         left = [{key: info[key] for key in fields} for info in reference["quarters"]]
         right = [{key: info[key] for key in fields} for info in current["quarters"]]
         if left != right:
-            raise ValueError("前4与前5基础公司日键、控制或收益不一致，不能作为同基础样本比较。")
+            raise ValueError("行业档位的基础公司日键、控制或收益不一致，无法按同一基础样本比较。")
         for info in reference["quarters"]:
             name = f"q{info['quarter']}/x.npy"
             a = np.load(Path(reference["path"]) / name, mmap_mode="r")[:, 0]
             b = np.load(Path(current["path"]) / name, mmap_mode="r")[:, 0]
             smaller, larger = (a, b) if reference["top_n"] < current["top_n"] else (b, a)
             if np.any(smaller > larger):
-                raise ValueError("行业前4提示并非行业前5提示的子集。")
-    print("已核对前4、前5基础键、控制和收益一致，提示包含关系正确。", flush=True)
+                raise ValueError("较小名额的提示公司日应为较大名额的子集。")
+    print("已核对行业档位的基础键、控制、收益及提示包含关系。", flush=True)
 
 
 # 三、逐窗口确定有效样本；最终样本逐行相同才可以共享固定效应处理。
@@ -515,7 +593,7 @@ def _stars(pvalue: float | None) -> str:
 # 四、将投影后的解释变量和小批收益留在内存，不再产生逐模型残差文件。
 def _fit_same_sample(cache: dict, group: dict, spec_id: int, full_coefficients: bool):
     controls, effects, _ = SPECS[spec_id]
-    columns = [f"quarterLag1IndTop{cache['top_n']}", *controls]
+    columns = [cache["signature"]["cue_column"], *controls]
     x_indices = [cache["signature"]["x_columns"].index(column) for column in columns]
     horizons = [outcome[0] for outcome in group["outcomes"]]
     keep = group["keep"]
@@ -677,6 +755,9 @@ def _result_rows(cache, horizon, spec_id, columns, active, beta, variance, info,
     p_cue = float(pvalues[cue_position])
     summary = {
         "行业前几名": int(cache["top_n"]), "提示变量": columns[0],
+        "提示公司清洗口径": cache["signature"]["cue_policy"],
+        "收益口径": cache["signature"]["return_definition"],
+        "合并筛样规格": cache["signature"]["sample_spec"],
         "窗口序号": int(horizon), "收益窗口": f"[t,t+{horizon}]",
         "因变量": RETURN_COLUMNS[horizon - 1], "规格": int(spec_id), "规格说明": description,
         "日期固定效应": "是" if effects in ("date", "both") else "否",
@@ -717,6 +798,8 @@ def _result_rows(cache, horizon, spec_id, columns, active, beta, variance, info,
             probability = float(pvalues[pos]) if se_valid else None
             coefficients.append({
                 "行业前几名": int(cache["top_n"]), "窗口序号": int(horizon),
+                "提示公司清洗口径": summary["提示公司清洗口径"],
+                "收益口径": summary["收益口径"], "合并筛样规格": summary["合并筛样规格"],
                 "收益窗口": summary["收益窗口"], "因变量": summary["因变量"],
                 "规格": int(spec_id), "变量": variable, "变量顺序": order + 1,
                 "变量类型": "线索事件" if order == 0 else "控制变量",
@@ -735,7 +818,7 @@ def _result_rows(cache, horizon, spec_id, columns, active, beta, variance, info,
 # 五、表格和图使用同一数学口径，按小批、相同样本组共享计算。
 def _iter_model_batch(cache, horizons, spec_id, full_coefficients):
     controls, effects, _ = SPECS[spec_id]
-    columns = [f"quarterLag1IndTop{cache['top_n']}", *controls]
+    columns = [cache["signature"]["cue_column"], *controls]
     indices = [cache["signature"]["x_columns"].index(column) for column in columns]
     groups = _window_samples(cache, horizons, indices, effects)
     for group in groups:

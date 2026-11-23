@@ -304,17 +304,20 @@ def load_industry_daily_panel(root, wanted, chunk_size=250_000):
     current_stat = panel_path.stat()
     if {"size": current_stat.st_size, "mtime_ns": current_stat.st_mtime_ns} != file_state:
         raise ValueError("读取期间日度行业市值排名面板发生变化，请重新运行。")
-    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=columns)
+    return pd.concat(parts, ignore_index=True) if parts else wanted.iloc[:0].reindex(columns=columns)
 
 
-def load_industry_daily_for_candidates(root, candidates, calendar):
-    """将排名日及事件日双方的键合并后，只扫描一次正式资格文件。"""
-    rank_keys = candidates[["Stkcd", "event_td"]].drop_duplicates().rename(columns={"event_td": "td"})
-    rank_keys["td"] = rank_keys["td"] - 3
-    rank_keys = rank_keys.merge(calendar, on="td", how="left", validate="m:1")
+def load_industry_daily_for_candidates(root, candidates, calendar=None):
+    """读取事件日双方的行业，行业排名口径同时读取提示公司的排名日。"""
     cue_keys = candidates[["Stkcd", "event_td", "event_Trddt"]].rename(columns={"event_td": "td", "event_Trddt": "Trddt"})
     recall_keys = candidates[["StkcdRecall", "event_td", "event_Trddt"]].rename(columns={"StkcdRecall": "Stkcd", "event_td": "td", "event_Trddt": "Trddt"})
-    wanted = pd.concat([rank_keys, cue_keys, recall_keys], ignore_index=True).drop_duplicates()
+    parts = [cue_keys, recall_keys]
+    if calendar is not None:
+        rank_keys = candidates[["Stkcd", "event_td"]].drop_duplicates().rename(columns={"event_td": "td"})
+        rank_keys["td"] = rank_keys["td"] - 3
+        rank_keys = rank_keys.merge(calendar, on="td", how="left", validate="m:1")
+        parts.append(rank_keys)
+    wanted = pd.concat(parts, ignore_index=True).drop_duplicates()
     return load_industry_daily_panel(root, wanted)
 
 
@@ -324,6 +327,64 @@ def match_industry_daily_rows(keys, daily, columns):
     if keys.duplicated(["Stkcd", "td"]).any():
         raise ValueError("待匹配公司日对应多个交易日期。")
     return keys.merge(daily[columns], on=["Stkcd", "td", "Trddt"], how="left", validate="1:1", indicator=True)
+
+
+def filter_event_industries(mm, industry_daily, audit_dir):
+    """市值分位和行业排名口径共用的事件日行业筛选。"""
+    industry = industry_daily[["Stkcd", "td", "Trddt", "IndustryCode", "industryGroup"]].copy()
+    industry["industryGroup"] = industry["industryGroup"].astype("string")
+    industry["IndustryCode"] = industry["IndustryCode"].astype("string").str.strip().str.upper()
+    coarse = (
+        industry["industryGroup"].isna()
+        & industry["Trddt"].lt("2012-10-26")
+        & industry["IndustryCode"].str.fullmatch(r"C[0-9]", na=False)
+    )
+    industry["industryBranch"] = industry["industryGroup"].str[:2].where(
+        ~coarse, industry["IndustryCode"]
+    )
+    industry = industry.rename(columns={"td": "event_td", "Trddt": "event_Trddt"})
+    cue_industry = industry.rename(columns={
+        "IndustryCode": "cueIndustryCode",
+        "industryGroup": "cueIndustryGroup",
+        "industryBranch": "cueIndustryBranch",
+    })
+    recall_industry = industry.rename(columns={
+        "Stkcd": "StkcdRecall",
+        "IndustryCode": "recallIndustryCode",
+        "industryGroup": "recallIndustryGroup",
+        "industryBranch": "recallIndustryBranch",
+    })
+    mm = mm.merge(cue_industry, on=["Stkcd", "event_td", "event_Trddt"], how="left", validate="m:1")
+    mm = mm.merge(recall_industry, on=["StkcdRecall", "event_td", "event_Trddt"], how="left", validate="m:1")
+
+    # 两边都有二级行业时直接比较；只有至少一方缺失时才比较一级分支。
+    both_fine = mm["cueIndustryGroup"].notna() & mm["recallIndustryGroup"].notna()
+    same_industry = both_fine & mm["cueIndustryGroup"].eq(mm["recallIndustryGroup"]).fillna(False)
+    both_branches = mm["cueIndustryBranch"].notna() & mm["recallIndustryBranch"].notna()
+    different_branch = both_branches & mm["cueIndustryBranch"].ne(mm["recallIndustryBranch"]).fillna(False)
+    uncertain = ~both_fine & ~different_branch
+    audit_path = Path(audit_dir) / "事件日公司对行业待核对.csv"
+    if uncertain.any() or audit_path.exists():
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        audit_columns = [
+            "Stkcd", "StkcdRecall", "event_td", "event_Trddt",
+            "cueIndustryCode", "cueIndustryGroup", "cueIndustryBranch",
+            "recallIndustryCode", "recallIndustryGroup", "recallIndustryBranch",
+        ]
+        audit = mm.loc[uncertain, audit_columns].copy()
+        audit["reason"] = np.where(
+            both_branches.loc[uncertain],
+            "同一大类且至少一方二级行业不明",
+            "事件日行业记录缺失或无法识别",
+        )
+        audit.to_csv(audit_path, index=False, encoding="utf-8-sig", date_format="%Y-%m-%d")
+        print(f"公司对行业核对清单：{audit_path}", flush=True)
+    print(
+        f"明确同行并删除：{int(same_industry.sum()):,}条；"
+        f"无法确认异业并删除：{int(uncertain.sum()):,}条；过滤前：{len(mm):,}条。",
+        flush=True,
+    )
+    return mm.loc[~(same_industry | uncertain)].copy()
 
 
 # %% 01. 读取第一阶段公司对，保留证券代码前导零
@@ -433,45 +494,21 @@ if CURRENT_DEFINITION == "industry_top":
     rows_before_base_filter = len(mm)
     mm = mm.merge(recalled_base, on=recalled_event_columns, how="inner", validate="m:1")
     print(f"剔除被提示公司事件日不在基础样本索引中的候选公司对：{rows_before_base_filter - len(mm):,}条。", flush=True)
-    cue_keys = mm[["Stkcd", "event_td", "event_Trddt"]].rename(columns={"event_td": "td", "event_Trddt": "Trddt"})
-    recall_keys = mm[["StkcdRecall", "event_td", "event_Trddt"]].rename(columns={"StkcdRecall": "Stkcd", "event_td": "td", "event_Trddt": "Trddt"})
-    wanted = pd.concat([cue_keys, recall_keys], ignore_index=True).drop_duplicates()
-    industry = match_industry_daily_rows(
-        wanted, industry_daily,
-        ["Stkcd", "td", "Trddt", "IndustryCode", "industryGroup"],
-    )
-    valid = industry["industryGroup"].notna()
-    coarse = industry["industryGroup"].isna() & industry["IndustryCode"].str.fullmatch(r"C[0-9]", na=False)
-    industry["industryBranch"] = industry["industryGroup"].str[:2].where(valid)
-    industry.loc[coarse, "industryBranch"] = industry.loc[coarse, "IndustryCode"]
-    bad = industry["_merge"].ne("both") | industry["IndustryCode"].isna() | (~valid & ~coarse)
-    if bad.any():
-        audit_path = Path(audit_dir) / "事件日公司对行业待核对.csv"
-        audit_path.parent.mkdir(parents=True, exist_ok=True)
-        industry.loc[bad].to_csv(audit_path, index=False, encoding="utf-8-sig", date_format="%Y-%m-%d")
-        print(f"删除事件日行业记录缺失或无法归并的公司日：{int(bad.sum()):,}条。核对清单：{audit_path}", flush=True)
-        industry = industry.loc[~bad].copy()
-    industry = industry.drop(columns=["_merge", "Trddt"])
-    cue_industry = industry.rename(columns={"td": "event_td", "IndustryCode": "cueIndustryCode", "industryGroup": "cueIndustryGroup", "industryBranch": "cueIndustryBranch"})
-    recall_industry = industry.rename(columns={"Stkcd": "StkcdRecall", "td": "event_td", "IndustryCode": "recallIndustryCode", "industryGroup": "recallIndustryGroup", "industryBranch": "recallIndustryBranch"})
-    mm = mm.merge(cue_industry, on=["Stkcd", "event_td"], how="left", validate="m:1")
-    mm = mm.merge(recall_industry, on=["StkcdRecall", "event_td"], how="left", validate="m:1")
-    both_valid = mm["cueIndustryGroup"].notna() & mm["recallIndustryGroup"].notna()
-    different_branch = (
-        mm["cueIndustryBranch"].notna() & mm["recallIndustryBranch"].notna()
-        & mm["cueIndustryBranch"].ne(mm["recallIndustryBranch"])
-    ).fillna(False)
-    uncertain = (~both_valid & ~different_branch).fillna(True)
-    if uncertain.any():
-        audit_path = Path(audit_dir) / "事件日公司对行业待核对.csv"
-        audit_path.parent.mkdir(parents=True, exist_ok=True)
-        mm.loc[uncertain].to_csv(audit_path, index=False, encoding="utf-8-sig", date_format="%Y-%m-%d")
-        print(f"删除事件日无法确认异业的公司对：{int(uncertain.sum()):,}条。核对清单：{audit_path}", flush=True)
-        mm = mm.loc[~uncertain].copy()
-    same_industry = (both_valid & mm["cueIndustryGroup"].eq(mm["recallIndustryGroup"])).fillna(False)
-    print(f"归并行业相同的公司对：{int(same_industry.sum()):,}；过滤前：{len(mm):,}。", flush=True)
-    mm = mm.loc[~same_industry].copy()
+    mm = filter_event_industries(mm, industry_daily, audit_dir)
     # 行业排名缺失的提示公司在主资格中记为0，不向后递补。
+elif CURRENT_DEFINITION in {"size90", "size95"}:
+    audit_dir = stage_root(PROJECT_ROOT) / "提示事件" / CURRENT_DEFINITION / "核对清单"
+    industry_daily = load_industry_daily_for_candidates(PROJECT_ROOT, mm)
+    mm = filter_event_industries(mm, industry_daily, audit_dir)
+    required_columns = [
+        "mktcap_tm3",
+        "marketCap_90th_percentile",
+        "marketCap_50th_percentile",
+        "marketCap_10th_percentile",
+    ]
+    if CURRENT_DEFINITION == "size95":
+        required_columns.append("marketCap_95th_percentile")
+    mm = mm.dropna(subset=required_columns).copy()
 else:
     if CURRENT_DEFINITION == "hs300":
         membership_path = paths["hs300_membership_path"]
@@ -659,19 +696,6 @@ else:
         "三轮公司对过滤合计删除记录数：",
         rows_before_filter - len(mm),
     )
-    if CURRENT_DEFINITION in {"size90", "size95"}:
-        required_columns = [
-            "mktcap_tm3",
-            "marketCap_90th_percentile",
-            "marketCap_50th_percentile",
-            "marketCap_10th_percentile",
-        ]
-
-        if CURRENT_DEFINITION == "size95":
-            required_columns.append("marketCap_95th_percentile")
-
-        mm = mm.dropna(subset=required_columns).copy()
-
 print("当前口径：", CURRENT_DEFINITION, "行业名额：", CURRENT_TOP_N)
 print("口径筛选后的公司对：", mm.shape)
 display(mm.head())

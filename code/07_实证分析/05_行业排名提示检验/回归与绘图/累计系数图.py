@@ -1,6 +1,7 @@
-"""分别估计行业前4、前5提示的累计收益系数，并绘制独立图及对比图。
+"""按行业名额和提示公司清洗口径分别估计累计收益系数并绘图。
 
 请自行运行本文件。本文件不重建行业排名或最终面板；导入时不读取研究数据。
+每种清洗口径内单独绘制行业前4与前5对比图。
 每个累计收益窗口保留自身有效样本；小批窗口仅在有效样本完全相同时复用投影。
 图中的系数不是将不同窗口的系数再次相加。
 收益已在面板中缩尾，沿用原值；系数、标准误和置信区间均以百分点表示。
@@ -21,12 +22,18 @@ sys.dont_write_bytecode = True
 # 从入口旁的子目录直接导入，不依赖运行时修改模块搜索路径。
 from 公共模块.行业排名回归公共模块 import (
     COMPUTATION_VERSION,
+    CUE_POLICIES,
     ENGINE_VERSION,
+    RETURN_LABELS,
+    SAMPLE_SPECS,
+    TOP_NS as SUPPORTED_TOP_NS,
     check_anchor,
     find_root,
+    industry_label,
     iter_cumulative_models,
-    output_root,
+    policy_label,
     prepare_cache,
+    result_root,
     runtime_guard,
     save_csv,
     save_json,
@@ -36,8 +43,11 @@ from 公共模块.行业排名回归公共模块 import (
 import pandas as pd
 
 
-# 一、运行参数。TOP_NS（每行业名额）可改为(4,)或(5,)单独运行。
-TOP_NS = (4, 5)
+# 一、运行参数。名额和清洗口径可以只选其中一项。
+TOP_NS = (2, 4, 5, 10)
+INDUSTRY_CUE_POLICIES = ("unclean", "clean")  # 提示公司未清洗、已清洗。
+RETURN_DEFINITION = "self_built_labels"  # 自算标签收益；official_labels 为官方标签收益。
+SAMPLE_SPEC = 5  # 最终回归面板的筛样规格。
 START_YEAR = 2005
 END_YEAR = 2025
 CHUNK_SIZE = 250_000  # 分块读取行数；只读取回归所需字段。
@@ -47,31 +57,39 @@ SPEC_ID = 6  # 第6规格：完整控制、公司×年度季度及交易日期�
 RESUME = True  # 续算：仅复用输入、数学口径及估计设置一致的已完成窗口。
 DRAW_ONLY = False  # 只重画：不准备缓存、不读取大型输入面板、不重新估计。
 
-RESULT_VERSION = 1
+RESULT_VERSION = 2
 INTERVALS = (
     (99, "#bdbdbd", 0.8, 0.75),
     (95, "#78909c", 1.6, 0.90),
     (90, "#1f4e79", 2.8, 1.00),
 )
 NUMERIC_FIELDS = [
-    "行业前几名", "窗口序号", "规格", "线索系数", "聚类标准误", "t值", "p值",
+    "行业前几名", "合并筛样规格", "窗口序号", "规格", "线索系数", "聚类标准误", "t值", "p值",
     "回归样本量", "有效提示公司日", "被提示公司聚类数", "日期聚类数",
     "删除缺失观测数", "删除单例组观测数", "固定效应秩", "残差自由度",
     "解释变量矩阵条件数", "R方", "组内R方",
     *[f"{level}%置信区间{side}" for level in (90, 95, 99) for side in ("下界", "上界")],
 ]
 TEXT_FIELDS = [
-    "提示变量", "收益窗口", "因变量", "规格说明", "日期固定效应",
+    "提示公司清洗口径", "收益口径", "提示变量", "收益窗口", "因变量", "规格说明", "日期固定效应",
     "被提示公司×年度季度固定效应", "求解方式", "结果单位", "输入签名", "模型状态",
 ]
 
 
 def validate_settings():
     """先检查可编辑参数，避免选错提示列、窗口或固定效应。"""
-    if not TOP_NS or any(type(n) is not int or n not in (4, 5) for n in TOP_NS):
-        raise ValueError("每行业名额只支持4或5，且不能为空。")
+    if not TOP_NS or any(type(n) is not int or n not in SUPPORTED_TOP_NS for n in TOP_NS):
+        raise ValueError("每行业名额只支持2、4、5或10，且不能为空。")
     if len(set(TOP_NS)) != len(TOP_NS):
         raise ValueError("每行业名额不能重复。")
+    if not INDUSTRY_CUE_POLICIES or any(policy not in CUE_POLICIES for policy in INDUSTRY_CUE_POLICIES):
+        raise ValueError("请填写提示公司未清洗或已清洗口径，至少选择一个。")
+    if len(set(INDUSTRY_CUE_POLICIES)) != len(INDUSTRY_CUE_POLICIES):
+        raise ValueError("提示公司清洗口径不能重复。")
+    if not isinstance(RETURN_DEFINITION, str) or RETURN_DEFINITION not in RETURN_LABELS:
+        raise ValueError("收益口径只能选择自算标签收益或官方标签收益。")
+    if type(SAMPLE_SPEC) is not int or SAMPLE_SPEC not in SAMPLE_SPECS:
+        raise ValueError(f"最终面板筛样规格应从{SAMPLE_SPECS}中选择。")
     if type(START_YEAR) is not int or type(END_YEAR) is not int or START_YEAR > END_YEAR:
         raise ValueError("起止年份必须为整数，且起始年不晚于结束年。")
     if type(CHUNK_SIZE) is not int or CHUNK_SIZE <= 0:
@@ -88,13 +106,14 @@ def validate_settings():
         raise ValueError("续算和只重画开关必须为布尔值。")
 
 
-def calculation_settings(top_n):
+def calculation_settings(top_n, cue_policy, cue_column):
     """单套结果的估计设置；运行开关和读取块大小不改变模型。"""
     return {
         "结果版本": RESULT_VERSION, "行业前几名": top_n,
+        "提示公司清洗口径": cue_policy, "提示变量": cue_column,
+        "收益口径": RETURN_DEFINITION, "合并筛样规格": SAMPLE_SPEC,
         "起始年份": START_YEAR, "结束年份": END_YEAR,
         "窗口终点": list(HORIZONS), "规格": SPEC_ID,
-        "提示变量": f"quarterLag1IndTop{top_n}",
         "样本规则": "每个窗口单独检查自身收益及本规格所需变量",
         "置信区间": "双侧逐点区间，与回归显著性使用同一残差自由度的t分布",
     }
@@ -107,7 +126,8 @@ def entry_code_hash():
     """
     tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
     parameter_names = {
-        "TOP_NS", "START_YEAR", "END_YEAR", "CHUNK_SIZE", "BATCH_SIZE", "HORIZONS", "SPEC_ID",
+        "TOP_NS", "INDUSTRY_CUE_POLICIES", "RETURN_DEFINITION", "SAMPLE_SPEC",
+        "START_YEAR", "END_YEAR", "CHUNK_SIZE", "BATCH_SIZE", "HORIZONS", "SPEC_ID",
         "RESUME", "DRAW_ONLY",
     }
     tree.body = [
@@ -121,16 +141,17 @@ def entry_code_hash():
     return hashlib.sha256(ast.dump(tree).encode("utf-8")).hexdigest()
 
 
-def result_paths(root, top_n):
-    folder = output_root(root) / "累计系数图"
+def result_paths(root, top_n, cue_policy):
+    folder = result_root(root, RETURN_DEFINITION, SAMPLE_SPEC) / "累计系数图"
+    name = industry_label(top_n, cue_policy)
     return {
-        "结果表": folder / f"行业前{top_n}名_累计系数.csv",
-        "摘要": folder / f"行业前{top_n}名_回归核对摘要.json",
-        "图片": folder / f"行业前{top_n}名_累计系数图.png",
+        "结果表": folder / f"{name}_累计系数.csv",
+        "摘要": folder / f"{name}_回归核对摘要.json",
+        "图片": folder / f"{name}_累计系数图.png",
     }
 
 
-def validate_rows(rows, top_n, input_id, *, complete=False):
+def validate_rows(rows, top_n, cue_policy, cue_column, input_id, *, complete=False):
     """检查完成标记、模型身份和必要统计量；不以存在文件代替估计完成。"""
     if not rows:
         raise ValueError(f"行业前{top_n}名没有已完成窗口。")
@@ -147,7 +168,8 @@ def validate_rows(rows, top_n, input_id, *, complete=False):
         if frame[field].isna().any() or frame[field].astype(str).str.strip().eq("").any():
             raise ValueError(f"行业前{top_n}名结果中的{field}不完整。")
     expected = {
-        "行业前几名": top_n, "提示变量": f"quarterLag1IndTop{top_n}",
+        "行业前几名": top_n, "提示公司清洗口径": cue_policy, "提示变量": cue_column,
+        "收益口径": RETURN_DEFINITION, "合并筛样规格": SAMPLE_SPEC,
         "规格": SPEC_ID, "输入签名": input_id, "模型状态": "完成",
         "结果单位": "百分点", "日期固定效应": "是",
         "被提示公司×年度季度固定效应": "是",
@@ -195,27 +217,43 @@ def snapshot_rows(rows):
     return result
 
 
-def read_saved_result(paths, top_n, *, input_id=None):
+def read_saved_result(paths, top_n, cue_policy, *, input_id=None):
     """摘要是权威进度；只重画时不核验或读取原始面板。"""
     if not paths["摘要"].is_file():
         raise FileNotFoundError(f"找不到回归核对摘要：{paths['摘要']}")
     metadata = json.loads(paths["摘要"].read_text(encoding="utf-8"))
-    if metadata.get("设置") != calculation_settings(top_n):
-        raise ValueError("已有结果设置与本次不同，不能续算或直接重画。")
-    if metadata.get("输入信息", {}).get("version") != ENGINE_VERSION:
+    input_info = metadata.get("输入信息")
+    if not isinstance(input_info, dict) or input_info.get("version") != ENGINE_VERSION:
         raise ValueError("已有结果的数学口径版本与当前版本不同，不能续算或直接重画。")
+    cue_column = input_info.get("cue_column")
+    expected = {
+        "top_n": top_n, "cue_policy": cue_policy,
+        "return_definition": RETURN_DEFINITION, "sample_spec": SAMPLE_SPEC,
+        "start_year": START_YEAR, "end_year": END_YEAR,
+    }
+    if (
+        not isinstance(cue_column, str) or not cue_column
+        or any(input_info.get(key) != value for key, value in expected.items())
+        or metadata.get("设置") != calculation_settings(top_n, cue_policy, cue_column)
+    ):
+        raise ValueError("已有结果设置与本次不同，不能续算或直接重画。")
     if input_id is not None and metadata.get("输入签名") != input_id:
         raise ValueError("输入数据或数学口径已经变化，不能复用旧窗口；请关闭续算后重新估计。")
     signature = metadata.get("输入签名")
     if not isinstance(signature, str) or len(signature) != 64:
         raise ValueError("已有摘要缺少有效输入签名。")
-    frame = validate_rows(metadata.get("模型结果", []), top_n, signature, complete=DRAW_ONLY)
+    frame = validate_rows(
+        metadata.get("模型结果", []), top_n, cue_policy, cue_column, signature, complete=DRAW_ONLY,
+    )
     return metadata, frame
 
 
-def table_anchors(root, top_n, input_id):
+def table_anchors(root, top_n, cue_policy, cue_column, input_id):
     """只读取同输入签名的表2第6规格，第1、第10窗口可直接复用。"""
-    path = output_root(root) / "回归结果" / f"行业前{top_n}名" / "模型汇总.csv"
+    path = (
+        result_root(root, RETURN_DEFINITION, SAMPLE_SPEC) / "回归结果"
+        / industry_label(top_n, cue_policy) / "模型汇总.csv"
+    )
     if not path.is_file():
         return {}
     # 不把“不显著”的空星号读成缺失，保证复用后摘要仍能严格序列化。
@@ -230,7 +268,7 @@ def table_anchors(root, top_n, input_id):
     ]
     if selected.empty:
         return {}
-    selected = validate_rows(selected.to_dict("records"), top_n, input_id)
+    selected = validate_rows(selected.to_dict("records"), top_n, cue_policy, cue_column, input_id)
     records = snapshot_rows(selected.to_dict("records"))
     return {int(row["窗口序号"]): row for row in records}
 
@@ -247,7 +285,10 @@ def save_progress(paths, metadata, rows):
 
 def common_estimation_settings(signature):
     """对比两种名额共同的估计口径，提示列本身不纳入共同控制列表。"""
-    fields = ("version", "start_year", "end_year", "returns", "inference")
+    fields = (
+        "version", "start_year", "end_year", "cue_policy", "return_definition",
+        "sample_spec", "returns", "inference",
+    )
     if not isinstance(signature, dict) or any(field not in signature for field in (*fields, "x_columns")):
         raise ValueError("结果摘要缺少共同估计口径，不能绘制前4与前5对比图。")
     if not isinstance(signature["x_columns"], list) or not signature["x_columns"]:
@@ -335,7 +376,7 @@ def style_axis(axis):
     axis.tick_params(direction="out")
 
 
-def draw_individual(frame, top_n, path):
+def draw_individual(frame, top_n, cue_policy, path):
     plt = plotting_tools()
     figure, axis = plt.subplots(figsize=(10, 5))
     for level, color, width, alpha in INTERVALS:
@@ -344,7 +385,10 @@ def draw_individual(frame, top_n, path):
     colors = frame["p值"].map(lambda value: "#d62728" if value < 0.10 else "#1a1a1a")
     axis.scatter(frame["窗口序号"], frame["线索系数"], color=colors, s=16, zorder=4)
     axis.scatter([], [], color="#d62728", s=16, label="红点：10%水平显著")
-    axis.set_title(f"行业前{top_n}名提示：累计收益动态\n被提示公司×年度季度及交易日期固定效应")
+    axis.set_title(
+        f"行业前{top_n}名提示（{policy_label(cue_policy)}）：累计收益动态\n"
+        "被提示公司×年度季度及交易日期固定效应"
+    )
     style_axis(axis)
     axis.legend(frameon=False, fontsize=9)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -353,7 +397,7 @@ def draw_individual(frame, top_n, path):
     plt.close(figure)
 
 
-def draw_comparison(frames, root):
+def draw_comparison(frames, root, cue_policy):
     """叠加展示两种提示定义；阴影为各自95%区间，不作系数差异检验。"""
     if not {4, 5}.issubset(frames):
         return
@@ -365,15 +409,72 @@ def draw_comparison(frames, root):
         axis.plot(x, frame["线索系数"].to_numpy(dtype=float), color=color, linewidth=1.5, label=f"行业前{top_n}名")
         axis.fill_between(x, frame["95%置信区间下界"].to_numpy(dtype=float),
                           frame["95%置信区间上界"].to_numpy(dtype=float), color=color, alpha=0.15)
-    axis.set_title("行业前4名与前5名提示：累计收益系数对比\n阴影为各自95%逐点置信区间")
+    label = policy_label(cue_policy)
+    axis.set_title(f"行业前4名与前5名提示（{label}）：累计收益系数对比\n阴影为各自95%逐点置信区间")
     style_axis(axis)
     axis.legend(frameon=False, fontsize=10)
-    path = output_root(root) / "累计系数图" / "行业前4名与前5名_累计系数对比.png"
+    path = (
+        result_root(root, RETURN_DEFINITION, SAMPLE_SPEC) / "累计系数图"
+        / f"行业前4名与前5名_{label}_累计系数对比.png"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     figure.tight_layout()
     figure.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(figure)
     print(f"对比图已保存：{path}", flush=True)
+
+
+def estimate_windows(root, paths, top_n, cue_policy, cache, code_hash):
+    """估计一组名额和清洗口径，保存进度并返回已校验的全部窗口。"""
+    signature = cache["signature"]
+    cue_column = signature["cue_column"]
+    input_id = cache["input_id"]
+    label = f"行业前{top_n}名（{policy_label(cue_policy)}）"
+    anchors = table_anchors(root, top_n, cue_policy, cue_column, input_id)
+    rows = []
+    metadata = {
+        "设置": calculation_settings(top_n, cue_policy, cue_column),
+        "输入签名": input_id, "输入信息": signature,
+        "公共估计设置": common_estimation_settings(signature),
+        "基础样本摘要": [
+            {field: quarter[field] for field in ("quarter", "rows", "key_digest", "base_data_digest")}
+            for quarter in cache["quarters"]
+        ],
+    }
+    if RESUME and (paths["摘要"].exists() or paths["结果表"].exists()):
+        metadata, _ = read_saved_result(paths, top_n, cue_policy, input_id=input_id)
+        # 已在读取时校验；恢复原字典，避免新旧可选字段被数据表统一补缺失。
+        rows = snapshot_rows(metadata["模型结果"])
+    metadata = record_computation(metadata, code_hash)
+    completed = {int(row["窗口序号"]): row for row in rows}
+    # 先保存已有结果并优先复用表2锚点，避免把第1、第10窗口重复估计。
+    if rows:
+        save_progress(paths, metadata, rows)
+    for horizon, anchor in sorted(anchors.items()):
+        if horizon in completed:
+            check_anchor(completed[horizon], anchor)
+            continue
+        rows.append(anchor)
+        completed[horizon] = anchor
+        save_progress(paths, metadata, rows)
+        print(f"{label}：复用表2第6规格窗口[t,t+{horizon}]。", flush=True)
+    # 小批估计缺失窗口；生成器仅对有效样本完全相同的窗口复用投影。
+    pending = [h for h in HORIZONS if h not in completed]
+    new_results = iter_cumulative_models(cache, pending, batch_size=BATCH_SIZE) if pending else ()
+    for row in new_results:
+        validate_rows([row], top_n, cue_policy, cue_column, input_id)
+        horizon = int(row["窗口序号"])
+        if horizon not in pending or horizon in completed:
+            raise ValueError("累计窗口生成器返回了非待估计窗口或重复窗口。")
+        if horizon in anchors:
+            check_anchor(row, anchors[horizon])
+        rows.append(row)
+        completed[horizon] = row
+        save_progress(paths, metadata, rows)
+        print(f"{label}：窗口[t,t+{horizon}]已完成并保存。", flush=True)
+    frame = validate_rows(rows, top_n, cue_policy, cue_column, input_id, complete=True)
+    save_progress(paths, metadata, rows)
+    return frame
 
 
 def main():
@@ -383,77 +484,41 @@ def main():
     font_cache = root / "work/行业排名回归/绘图字体缓存"
     font_cache.mkdir(parents=True, exist_ok=True)
     os.environ["MPLCONFIGDIR"] = str(font_cache)
-    frames = {}
-    # 二、只重画直接读取小型结果摘要，完全跳过大面板及缓存准备。
-    if DRAW_ONLY:
-        metadata_by_top = {}
-        for top_n in TOP_NS:
-            paths = result_paths(root, top_n)
-            metadata, frame = read_saved_result(paths, top_n)
-            metadata_by_top[top_n] = metadata
-            frames[top_n] = frame
-            draw_individual(frame, top_n, paths["图片"])
-            print(f"行业前{top_n}名已重画：{paths['图片']}", flush=True)
-        verify_saved_comparison(metadata_by_top)
-        draw_comparison(frames, root)
-        return
+    code_hash = entry_code_hash() if not DRAW_ONLY else None
 
-    # 三、按名额准备紧凑缓存，核对前4与前5使用同一批被提示公司日。
-    caches = [prepare_cache(root, n, START_YEAR, END_YEAR, CHUNK_SIZE) for n in TOP_NS]
-    verify_base_keys(caches)
-    code_hash = entry_code_hash()
-    for top_n, cache in zip(TOP_NS, caches):
-        paths = result_paths(root, top_n)
-        input_id = cache["input_id"]
-        anchors = table_anchors(root, top_n, input_id)
-        rows = []
-        metadata = {
-            "设置": calculation_settings(top_n),
-            "输入签名": input_id, "输入信息": cache["signature"],
-            "公共估计设置": common_estimation_settings(cache["signature"]),
-            "基础样本摘要": [
-                {field: quarter[field] for field in ("quarter", "rows", "key_digest", "base_data_digest")}
-                for quarter in cache["quarters"]
-            ],
-        }
-        if RESUME and (paths["摘要"].exists() or paths["结果表"].exists()):
-            metadata, _ = read_saved_result(paths, top_n, input_id=input_id)
-            # 已在读取时校验；恢复原字典，避免新旧可选字段被数据表统一补缺失。
-            rows = snapshot_rows(metadata["模型结果"])
-        metadata = record_computation(metadata, code_hash)
-        completed = {int(row["窗口序号"]): row for row in rows}
-        # 四、先保存已有结果并优先复用表2锚点，避免把第1、第10窗口重复估计。
-        if rows:
-            save_progress(paths, metadata, rows)
-        for horizon, anchor in sorted(anchors.items()):
-            if horizon in completed:
-                check_anchor(completed[horizon], anchor)
-                continue
-            rows.append(anchor)
-            completed[horizon] = anchor
-            save_progress(paths, metadata, rows)
-            print(f"行业前{top_n}名：复用表2第6规格窗口[t,t+{horizon}]。", flush=True)
-        # 五、小批估计缺失窗口；生成器仅对有效样本完全相同的窗口复用投影。
-        pending = [h for h in HORIZONS if h not in completed]
-        new_results = iter_cumulative_models(cache, pending, batch_size=BATCH_SIZE) if pending else ()
-        for row in new_results:
-            validate_rows([row], top_n, input_id)
-            horizon = int(row["窗口序号"])
-            if horizon not in pending or horizon in completed:
-                raise ValueError("累计窗口生成器返回了非待估计窗口或重复窗口。")
-            if horizon in anchors:
-                check_anchor(row, anchors[horizon])
-            rows.append(row)
-            completed[horizon] = row
-            save_progress(paths, metadata, rows)
-            print(f"行业前{top_n}名：窗口[t,t+{horizon}]已完成并保存。", flush=True)
-        frame = validate_rows(rows, top_n, input_id, complete=True)
-        save_progress(paths, metadata, rows)
-        frames[top_n] = frame
-        # 六、完整结果通过核对后绘图，并保留小型结果供以后只重画。
-        draw_individual(frame, top_n, paths["图片"])
-        print(f"累计系数结果：{paths['结果表']}\n累计系数图：{paths['图片']}", flush=True)
-    draw_comparison(frames, root)
+    for cue_policy in INDUSTRY_CUE_POLICIES:
+        frames = {}
+        metadata_by_top = {}
+        caches = {}
+        # 只重画时直接读取小型结果摘要。估计时按清洗口径准备缓存。
+        if not DRAW_ONLY:
+            caches = {
+                n: prepare_cache(
+                    root, n, START_YEAR, END_YEAR, CHUNK_SIZE, cue_policy,
+                    return_definition=RETURN_DEFINITION, sample_spec=SAMPLE_SPEC,
+                )
+                for n in TOP_NS
+            }
+        for top_n in TOP_NS:
+            paths = result_paths(root, top_n, cue_policy)
+            if DRAW_ONLY:
+                metadata_by_top[top_n], frame = read_saved_result(paths, top_n, cue_policy)
+            else:
+                frame = estimate_windows(root, paths, top_n, cue_policy, caches[top_n], code_hash)
+                print(f"累计系数结果：{paths['结果表']}", flush=True)
+            frames[top_n] = frame
+            draw_individual(frame, top_n, cue_policy, paths["图片"])
+            print(f"累计系数图：{paths['图片']}", flush=True)
+        if {4, 5}.issubset(frames):
+            try:
+                if DRAW_ONLY:
+                    verify_saved_comparison(metadata_by_top)
+                else:
+                    verify_base_keys([caches[4], caches[5]])
+            except ValueError as error:
+                print(f"{policy_label(cue_policy)}的前4、前5对比图跳过：{error}", flush=True)
+            else:
+                draw_comparison(frames, root, cue_policy)
 
 
 if __name__ == "__main__":
