@@ -48,6 +48,11 @@ def input_path(folder, filename):
     return matches[0]
 
 
+def factor_return_columns(model):
+    """按正式输出顺序返回指定模型的因子收益列名。"""
+    return [f'{factor}{weight}' for factor in FACTORS[model] for weight in WEIGHTS]
+
+
 def load_industry(input_dir):
     industry = pd.read_csv(
         input_path(input_dir, 'STK_INDUSTRYCLASS.csv'),
@@ -178,95 +183,114 @@ def read_daily_years(input_dir, end_year, trading_days, shares, companies):
         data = pd.concat(chunks, ignore_index=True)
         del chunks
         for year, part in data.groupby('year', sort=True):
-            daily = part.rename(columns={'Trddt': 'date'}).drop(columns='year')
-            daily['date'] = pd.to_datetime(daily['date'], format='%Y-%m-%d')
-            daily = daily.loc[daily['date'].isin(trading_days)].sort_values('date').reset_index(drop=True)
-            if daily.duplicated(['Stkcd', 'date']).any():
+            daily_quotes = part.rename(columns={'Trddt': 'date'}).drop(columns='year')
+            daily_quotes['date'] = pd.to_datetime(daily_quotes['date'], format='%Y-%m-%d')
+            daily_quotes = daily_quotes.loc[daily_quotes['date'].isin(trading_days)]
+            daily_quotes = daily_quotes.sort_values('date').reset_index(drop=True)
+            if daily_quotes.duplicated(['Stkcd', 'date']).any():
                 raise ValueError(f'{year} 年个股行情存在重复的股票和交易日')
-            daily = pd.merge_asof(daily, flags, on='date', by='Stkcd')
+            daily_quotes = pd.merge_asof(daily_quotes, flags, on='date', by='Stkcd')
             # 有 B 股时用分别计价的总市值，缺失时用原总市值。
-            daily['daily_total_cap'] = daily['Dsmvtl3'].where(daily['has_b_shares'].eq(True), daily['Dsmvtl2'])
-            daily['daily_total_cap'] = daily['daily_total_cap'].fillna(daily['Dsmvtl2'])
-            daily['daily_float_cap'] = daily['Dsmvosd'] + (
-                daily['daily_total_cap'] - daily['Dsmvtll']
+            daily_quotes['daily_total_cap'] = daily_quotes['Dsmvtl3'].where(
+                daily_quotes['has_b_shares'].eq(True), daily_quotes['Dsmvtl2']
+            )
+            daily_quotes['daily_total_cap'] = daily_quotes['daily_total_cap'].fillna(daily_quotes['Dsmvtl2'])
+            daily_quotes['daily_float_cap'] = daily_quotes['Dsmvosd'] + (
+                daily_quotes['daily_total_cap'] - daily_quotes['Dsmvtll']
             ).clip(lower=0)
-            issue_price = daily['Stkcd'].map(companies['Ipoprc'])
-            listed_today = daily['date'].eq(daily['Stkcd'].map(companies['Listdt'])) & issue_price.gt(0)
-            daily['offer_return'] = daily['Dretwd'].where(~listed_today, daily['Clsprc'].div(issue_price) - 1)
-            daily = daily.drop(columns=[*CAP_COLUMNS, 'has_b_shares'])
-            yield int(year), daily
+            issue_price = daily_quotes['Stkcd'].map(companies['Ipoprc'])
+            listed_today = daily_quotes['date'].eq(
+                daily_quotes['Stkcd'].map(companies['Listdt'])
+            ) & issue_price.gt(0)
+            daily_quotes['offer_return'] = daily_quotes['Dretwd'].where(
+                ~listed_today, daily_quotes['Clsprc'].div(issue_price) - 1
+            )
+            daily_quotes = daily_quotes.drop(columns=[*CAP_COLUMNS, 'has_b_shares'])
+            yield int(year), daily_quotes
 
 
-def last_actual_trades(previous, daily, cutoff):
+def last_actual_trades(previous, daily_quotes, cutoff):
     cols = ['Stkcd', 'date', 'daily_float_cap']
-    sample = daily.loc[daily['Filling'].eq(0) & daily['date'].le(cutoff), cols]
+    sample = daily_quotes.loc[daily_quotes['Filling'].eq(0) & daily_quotes['date'].le(cutoff), cols]
     if previous is not None:
         sample = pd.concat([previous.reset_index(), sample], ignore_index=True)
     return sample.sort_values('date').drop_duplicates('Stkcd', keep='last').set_index('Stkcd')
 
 
-def form_portfolios(june, december, annual, shares, industry, days, june_end,
-                    december_end, last_december):
+def form_portfolios(
+    june_quotes, december_quotes, annual_reports, shares, industry,
+    trading_day_numbers, june_end, december_end, latest_december_trades,
+):
     """六月规模组和十二月特征组分别划分，再按证券代码取交集。"""
-    june = june.loc[june['daily_float_cap'].gt(0)].set_index('Stkcd').copy()
-    december = december.set_index('Stkcd').copy()
-    june['float_cap'] = june['daily_float_cap']
-    june['total_cap'] = june['daily_total_cap']
+    june_members = june_quotes.loc[june_quotes['daily_float_cap'].gt(0)].set_index('Stkcd').copy()
+    december_features = december_quotes.set_index('Stkcd').copy()
+    june_members['float_cap'] = june_members['daily_float_cap']
+    june_members['total_cap'] = june_members['daily_total_cap']
 
-    december['value_cap3'] = december['daily_float_cap']
+    december_features['value_cap3'] = december_features['daily_float_cap']
     # 五因子对有年末股本明细的跨市场上市公司使用流通股数乘年末收盘价。
     year_end = pd.Timestamp(june_end.year - 1, 12, 31)
     year_end_shares = shares.loc[
         shares['date'].eq(year_end) & shares['DeclareDate'].le(june_end)
-    ].set_index('Stkcd').reindex(december.index)
-    cross_listed = december['cross_listed'].eq(True) | year_end_shares['cross_listed'].eq(True)
+    ].set_index('Stkcd').reindex(december_features.index)
+    cross_listed = december_features['cross_listed'].eq(True) | year_end_shares['cross_listed'].eq(True)
     shares_count = year_end_shares['TradeSharesTotal']
-    exact = shares_count.where(cross_listed & shares_count.gt(0)) * december['Clsprc'] / 1000
-    december['value_cap5'] = exact.fillna(december['daily_float_cap'])
+    exact = shares_count.where(cross_listed & shares_count.gt(0)) * december_features['Clsprc'] / 1000
+    december_features['value_cap5'] = exact.fillna(december_features['daily_float_cap'])
 
     # 年末停牌填充且有有效的最近成交市值时，三因子和五因子均替换。
-    actual = last_december.reindex(december.index)
-    gap = days.at[december_end] - actual['date'].map(days)
-    use_actual = december['Filling'].eq(1) & gap.ge(0) & actual['daily_float_cap'].notna()
+    actual = latest_december_trades.reindex(december_features.index)
+    gap = trading_day_numbers.at[december_end] - actual['date'].map(trading_day_numbers)
+    use_actual = december_features['Filling'].eq(1) & gap.ge(0) & actual['daily_float_cap'].notna()
     for col in ('value_cap3', 'value_cap5'):
-        december[col] = december[col].mask(use_actual, actual['daily_float_cap'])
+        december_features[col] = december_features[col].mask(use_actual, actual['daily_float_cap'])
 
-    june_main = june['Markettype'].isin(MAIN_BOARD)
-    december_main = december['Markettype'].isin(MAIN_BOARD)
+    june_main = june_members['Markettype'].isin(MAIN_BOARD)
+    december_main = december_features['Markettype'].isin(MAIN_BOARD)
     if june_end < SME_MERGER:
         # 两套断点都按六月换组时的板块状态选主板。中小板股票仍能入组。
-        june_main &= ~june.index.to_series().between(2000, 3999)
-        december_main &= ~december.index.to_series().between(2000, 3999)
-    median = june.loc[june_main, 'float_cap'].median()
+        june_main &= ~june_members.index.to_series().between(2000, 3999)
+        december_main &= ~december_features.index.to_series().between(2000, 3999)
+    median = june_members.loc[june_main, 'float_cap'].median()
     if pd.isna(median):
         raise ValueError(f'{june_end.date()} 没有可用于规模断点的主板市值')
-    june['size_group'] = np.where(june['float_cap'].ge(median), 'B', 'S')
+    june_members['size_group'] = np.where(june_members['float_cap'].ge(median), 'B', 'S')
 
     # 六月断点是交易日，非交易日公告映射到下一交易日后，此处的筛选结果相同。
-    known = annual.loc[annual['announced'].le(june_end)].copy()
-    is_financial = mark_financials(known.assign(date=december_end), industry)
+    available_reports = annual_reports.loc[annual_reports['announced'].le(june_end)].copy()
+    is_financial = mark_financials(available_reports.assign(date=december_end), industry)
     before_change = june_end.year < PROFIT_CHANGE.year
-    book = known['book'].where(known['book'].ne(0) if before_change else known['book'].gt(0))
-    profit = known['operating_profit'].div(book)
+    book = available_reports['book']
+    profit_equity = book.where(book.ne(0) if before_change else book.gt(0))
+    profitability = available_reports['operating_profit'].div(profit_equity)
     # 2023 年换组起，四项利润科目全空的正权益金融股以零作为排序值。
     if before_change:
-        known['op'] = profit.mask(is_financial)
+        available_reports['op'] = profitability.mask(is_financial)
     else:
-        known['op'] = profit.mask(is_financial & known['blank_financial_profit'], 0)
-    december = december.join(known.set_index('Stkcd')[['book', 'op', 'inv']], validate='one_to_one')
-    for signal, cap in (('bm3', 'value_cap3'), ('bm5', 'value_cap5')):
-        december[signal] = december['book'].where(december['book'].gt(0)).div(
-            december[cap].where(december[cap].gt(0)) * 1000
+        available_reports['op'] = profitability.mask(
+            is_financial & available_reports['blank_financial_profit'], 0
         )
-    signals = ['bm3', 'bm5', 'op', 'inv']
-    for signal in signals:
-        values = december[signal]
+    december_features = december_features.join(
+        available_reports.set_index('Stkcd')[['book', 'op', 'inv']], validate='one_to_one'
+    )
+    for feature_name, cap in (('bm3', 'value_cap3'), ('bm5', 'value_cap5')):
+        december_features[feature_name] = december_features['book'].where(december_features['book'].gt(0)).div(
+            december_features[cap].where(december_features[cap].gt(0)) * 1000
+        )
+    # 保留排序数值，分组标签写入独立的列。
+    feature_columns = ('bm3', 'bm5', 'op', 'inv')
+    feature_group_columns = [f'{name}_group' for name in feature_columns]
+    for feature_name in feature_columns:
+        group_column = f'{feature_name}_group'
+        values = december_features[feature_name]
         low, high = values.loc[december_main].quantile([0.30, 0.70])
-        december[signal] = pd.Series(
+        december_features[group_column] = pd.Series(
             np.select([values.ge(high), values.lt(low), values.notna() & pd.notna(low)],
                       ['H', 'L', 'M'], default=''), index=values.index,
         ).replace('', np.nan)
-    return june[['size_group', *WEIGHTS.values()]].join(december[signals], how='inner').reset_index()
+    return june_members[['size_group', *WEIGHTS.values()]].join(
+        december_features[feature_group_columns], how='inner'
+    ).reset_index()
 
 
 def weighted_mean_by_group(
@@ -306,53 +330,47 @@ def weighted_mean_by_group(
     return out.loc[:, list(group_cols) + [value_name, "n_stocks", "sum_weight"]]
 
 
-def make_ff_2x3_factors(
-    legs: pd.DataFrame,
-    date_col: str,
-    size_col: str,
-    char_col: str,
-    return_col: str,
-    smb_col: str,
-    hml_col: str,
-) -> pd.DataFrame:
-    """Build Fama-French-style SMB and HML from six 2 x 3 portfolio returns."""
-    wide = legs.pivot_table(
-        index=date_col,
-        columns=[size_col, char_col],
-        values=return_col,
-        aggfunc="first",
+def make_ff_2x3_factors(group_returns: pd.DataFrame, feature_name: str) -> pd.DataFrame:
+    """由六组收益计算规模收益差和特征收益差。"""
+    wide_returns = group_returns.pivot_table(
+        index='date',
+        columns=['size_group', f'{feature_name}_group'],
+        values='portfolio_return',
+        aggfunc='first',
     )
 
-    required = [("S", "L"), ("S", "M"), ("S", "H"), ("B", "L"), ("B", "M"), ("B", "H")]
-    for col in required:
-        if col not in wide.columns:
-            wide[col] = pd.NA
+    required_groups = (('S', 'L'), ('S', 'M'), ('S', 'H'), ('B', 'L'), ('B', 'M'), ('B', 'H'))
+    for group_key in required_groups:
+        if group_key not in wide_returns.columns:
+            wide_returns[group_key] = pd.NA
 
-    out = pd.DataFrame(index=wide.index)
-    out[smb_col] = (
-        (wide[("S", "L")] + wide[("S", "M")] + wide[("S", "H")]) / 3
-        - (wide[("B", "L")] + wide[("B", "M")] + wide[("B", "H")]) / 3
+    daily_spreads = pd.DataFrame(index=wide_returns.index)
+    daily_spreads[f'size_{feature_name}'] = (
+        (wide_returns[('S', 'L')] + wide_returns[('S', 'M')] + wide_returns[('S', 'H')]) / 3
+        - (wide_returns[('B', 'L')] + wide_returns[('B', 'M')] + wide_returns[('B', 'H')]) / 3
     )
-    out[hml_col] = (
-        (wide[("S", "H")] + wide[("B", "H")]) / 2
-        - (wide[("S", "L")] + wide[("B", "L")]) / 2
+    daily_spreads[feature_name] = (
+        (wide_returns[('S', 'H')] + wide_returns[('B', 'H')]) / 2
+        - (wide_returns[('S', 'L')] + wide_returns[('B', 'L')]) / 2
     )
 
-    return out.reset_index()
+    return daily_spreads.rename_axis('date')
 
 
-def market_returns(daily, previous_december, days, risk_free):
+def market_returns(daily_quotes, previous_december_quotes, trading_day_numbers, risk_free_rates):
     cols = ['Stkcd', 'date', 'Filling', 'offer_return', 'daily_float_cap', 'daily_total_cap']
-    sample = pd.concat([previous_december[cols], daily[cols]], ignore_index=True).sort_values(['Stkcd', 'date'])
+    sample = pd.concat(
+        [previous_december_quotes[cols], daily_quotes[cols]], ignore_index=True
+    ).sort_values(['Stkcd', 'date'])
     stock = sample['Stkcd']
-    number = sample['date'].map(days)
+    number = sample['date'].map(trading_day_numbers)
     adjacent = stock.eq(stock.shift()) & number.diff().eq(1)
     for source, target in (('daily_float_cap', 'lag_float'), ('daily_total_cap', 'lag_total')):
         weight = sample[source]
         # 上一开市日的市值可来自停牌填充。新上市等无前日记录时用当日市值。
         sample[target] = weight.shift().where(adjacent, weight)
-    sample = sample.loc[sample['Filling'].eq(0) & sample['date'].isin(risk_free.index)]
-    result = risk_free.to_frame()
+    sample = sample.loc[sample['Filling'].eq(0) & sample['date'].isin(risk_free_rates.index)]
+    result = risk_free_rates.to_frame()
     for i, weight in ((1, 'lag_float'), (2, 'lag_total')):
         name = f'Market{i}'
         value = weighted_mean_by_group(sample, ['date'], 'offer_return', weight, name).set_index('date')[name]
@@ -361,49 +379,59 @@ def market_returns(daily, previous_december, days, risk_free):
     return result
 
 
-def portfolio_returns(daily, labels):
+def portfolio_returns(daily_quotes, formation_labels):
     """按固定六月权重计算六组日收益，再计算组合间收益差。"""
-    data = daily.loc[daily['Filling'].eq(0) & daily['Dretwd'].notna()].merge(
-        labels, on='Stkcd', how='inner', validate='many_to_one',
+    valid_quotes = daily_quotes['Filling'].eq(0) & daily_quotes['Dretwd'].notna()
+    labeled_quotes = daily_quotes.loc[valid_quotes].merge(
+        formation_labels, on='Stkcd', how='inner', validate='many_to_one',
     )
-    drop_profit = data['date'].lt(PROFIT_CHANGE) & data['financial']
-    data.loc[drop_profit, 'op'] = np.nan
-    by_model = {3: [], 5: []}
-    for i, weight in WEIGHTS.items():
-        result = []
-        for signal in ('bm3', 'bm5', 'op', 'inv'):
-            sample = data.loc[data[signal].notna()]
-            legs = weighted_mean_by_group(sample, ['date', 'size_group', signal], 'offer_return', weight, 'portfolio_return')
-            result.append(make_ff_2x3_factors(
-                legs, 'date', 'size_group', signal, 'portfolio_return', f'size_{signal}', signal,
-            ).set_index('date'))
-        spreads = pd.concat(result, axis=1)
-        three = pd.DataFrame({'SMB': spreads['size_bm3'], 'HML': spreads['bm3']})
-        five = pd.DataFrame({
-            'SMB': spreads[['size_bm5', 'size_op', 'size_inv']].mean(axis=1, skipna=False),
-            'HML': spreads['bm5'], 'RMW': spreads['op'], 'CMA': -spreads['inv'],
+    exclude_profitability = (
+        labeled_quotes['date'].lt(PROFIT_CHANGE) & labeled_quotes['financial']
+    )
+    labeled_quotes.loc[exclude_profitability, 'op_group'] = np.nan
+    model_parts = {3: [], 5: []}
+    for weight_method, weight_column in WEIGHTS.items():
+        spread_parts = []
+        for feature_name in ('bm3', 'bm5', 'op', 'inv'):
+            group_column = f'{feature_name}_group'
+            feature_quotes = labeled_quotes.loc[labeled_quotes[group_column].notna()]
+            group_returns = weighted_mean_by_group(
+                feature_quotes, ['date', 'size_group', group_column],
+                'offer_return', weight_column, 'portfolio_return',
+            )
+            spread_parts.append(make_ff_2x3_factors(group_returns, feature_name))
+        feature_spreads = pd.concat(spread_parts, axis=1)
+        three_factors = pd.DataFrame({'SMB': feature_spreads['size_bm3'], 'HML': feature_spreads['bm3']})
+        five_factors = pd.DataFrame({
+            'SMB': feature_spreads[['size_bm5', 'size_op', 'size_inv']].mean(axis=1, skipna=False),
+            'HML': feature_spreads['bm5'], 'RMW': feature_spreads['op'], 'CMA': -feature_spreads['inv'],
         })
-        by_model[3].append(three.add_suffix(str(i)))
-        by_model[5].append(five.add_suffix(str(i)))
-    return {model: pd.concat(parts, axis=1) for model, parts in by_model.items()}
+        model_parts[3].append(three_factors.add_suffix(str(weight_method)))
+        model_parts[5].append(five_factors.add_suffix(str(weight_method)))
+    return {model: pd.concat(parts, axis=1) for model, parts in model_parts.items()}
 
 
 def calculate_factors(input_dir, rate_file, start, end):
     """一次读入原始行情，逐年计算日度三因子和五因子。"""
     input_dir = Path(input_dir)
     calendar = pd.read_csv(input_path(input_dir, 'CER_Cale.csv'), parse_dates=['Clddt'])
-    trading = calendar.loc[calendar['Markettype'].eq(1) & calendar['Statse'].eq('O'), 'Clddt']
-    trading = trading.drop_duplicates().sort_values()
-    days = pd.Series(np.arange(len(trading)), index=pd.DatetimeIndex(trading))
-    month_ends = trading.groupby([trading.dt.year, trading.dt.month]).max()
-    requested = trading.loc[trading.between(start, end)]
-    if requested.empty:
+    trading_dates = calendar.loc[calendar['Markettype'].eq(1) & calendar['Statse'].eq('O'), 'Clddt']
+    trading_dates = trading_dates.drop_duplicates().sort_values()
+    # 以交易日序号之差识别相邻交易日。
+    trading_day_numbers = pd.Series(
+        np.arange(len(trading_dates)), index=pd.DatetimeIndex(trading_dates)
+    )
+    month_ends = trading_dates.groupby([trading_dates.dt.year, trading_dates.dt.month]).max()
+    requested_trading_dates = trading_dates.loc[trading_dates.between(start, end)]
+    if requested_trading_dates.empty:
         raise ValueError('所选区间没有交易日')
     rate = pd.read_csv(rate_file, parse_dates=['ChangeDate']).sort_values('ChangeDate')
     rate = rate.loc[rate['ChangeDate'].le('2015-10-24'), ['ChangeDate', 'LumpFixed3Month']]
-    rate = pd.merge_asof(requested.to_frame('date'), rate, left_on='date', right_on='ChangeDate').set_index('date')
-    rf = np.expm1(np.log1p(rate['LumpFixed3Month'] / 100) / 365).rename('rf')
-    if rf.isna().any():
+    rate = pd.merge_asof(
+        requested_trading_dates.to_frame('date'), rate, left_on='date', right_on='ChangeDate'
+    ).set_index('date')
+    risk_free_rates = np.expm1(np.log1p(rate['LumpFixed3Month'] / 100) / 365).rename('rf')
+    if risk_free_rates.isna().any():
         raise ValueError('部分交易日缺少三个月定存基准利率')
 
     financials = load_financials(input_dir)
@@ -416,60 +444,77 @@ def calculate_factors(input_dir, rate_file, start, end):
 
     yearly_factors = {3: [], 5: []}
     prior_labels = None
-    last_december = previous_december = None
-    seen = pd.DatetimeIndex([])
-    for year, daily in read_daily_years(input_dir, end.year, days.index, shares, companies):
-        december_end = month_ends.get((year, 12), pd.NaT)
-        dec = daily.loc[daily['date'].eq(december_end)]
-        year_rf = rf.loc[rf.index.year == year]
+    last_december_trades = previous_december = None
+    covered_trade_dates = pd.DatetimeIndex([])
+    for quote_year, daily_quotes in read_daily_years(
+        input_dir, end.year, trading_day_numbers.index, shares, companies
+    ):
+        december_end = month_ends.get((quote_year, 12), pd.NaT)
+        december_quotes = daily_quotes.loc[daily_quotes['date'].eq(december_end)]
+        year_risk_free = risk_free_rates.loc[risk_free_rates.index.year == quote_year]
         # 起始年前一年的六月分组供首年上半年使用。
-        if year >= start.year - 1 and previous_december is not None:
-            june_end = month_ends.get((year, 6), pd.NaT)
-            need_formation = year < end.year or end.month >= 7
+        if quote_year >= start.year - 1 and previous_december is not None:
+            june_end = month_ends.get((quote_year, 6), pd.NaT)
+            need_formation = quote_year < end.year or end.month >= 7
             current_labels = None
             if need_formation:
-                june = daily.loc[daily['date'].eq(june_end)]
-                if june.empty:
-                    raise ValueError(f'{year} 年组合缺少六月末行情')
-                annual = financials.loc[financials['year'].eq(year - 1)]
+                june_quotes = daily_quotes.loc[daily_quotes['date'].eq(june_end)]
+                if june_quotes.empty:
+                    raise ValueError(f'{quote_year} 年组合缺少六月末行情')
+                annual_reports = financials.loc[financials['year'].eq(quote_year - 1)]
                 current_labels = form_portfolios(
-                    june, previous_december, annual, shares, industry, days, june_end,
-                    month_ends.at[(year - 1, 12)], last_december,
+                    june_quotes, previous_december, annual_reports, shares, industry,
+                    trading_day_numbers, june_end, month_ends.at[(quote_year - 1, 12)],
+                    last_december_trades,
                 )
 
             # 当年上半年沿用上一轮标签，下半年使用当年六月标签。
-            if not year_rf.empty:
-                print(f'计算 {year} 年日度因子', flush=True)
-                selected = daily.loc[daily['date'].isin(year_rf.index)].copy()
-                has_trade = selected['Filling'].eq(0) & selected['Dretwd'].notna()
-                seen = seen.union(pd.DatetimeIndex(selected.loc[has_trade, 'date'].unique()))
-                selected['financial'] = mark_financials(
-                    selected.loc[selected['date'].lt(PROFIT_CHANGE) & selected['Filling'].eq(0)], industry,
-                ).reindex(selected.index).eq(True)
-                market = market_returns(daily, previous_december, days, year_rf)
-                portfolios = {3: [], 5: []}
-                for second_half, labels in ((False, prior_labels), (True, current_labels)):
-                    part = selected.loc[selected['date'].dt.month.ge(7).eq(second_half)]
+            if not year_risk_free.empty:
+                print(f'计算 {quote_year} 年日度因子', flush=True)
+                selected_quotes = daily_quotes.loc[daily_quotes['date'].isin(year_risk_free.index)].copy()
+                has_trade = selected_quotes['Filling'].eq(0) & selected_quotes['Dretwd'].notna()
+                covered_trade_dates = covered_trade_dates.union(
+                    pd.DatetimeIndex(selected_quotes.loc[has_trade, 'date'].unique())
+                )
+                selected_quotes['financial'] = mark_financials(
+                    selected_quotes.loc[
+                        selected_quotes['date'].lt(PROFIT_CHANGE) & selected_quotes['Filling'].eq(0)
+                    ],
+                    industry,
+                ).reindex(selected_quotes.index).eq(True)
+                year_market = market_returns(
+                    daily_quotes, previous_december, trading_day_numbers, year_risk_free
+                )
+                year_portfolios = {3: [], 5: []}
+                for second_half, formation_labels in ((False, prior_labels), (True, current_labels)):
+                    part = selected_quotes.loc[selected_quotes['date'].dt.month.ge(7).eq(second_half)]
                     if not part.empty:
-                        if labels is None:
-                            raise ValueError(f'{year} 年的日度收益缺少对应六月分组')
-                        for model, factor in portfolio_returns(part, labels).items():
-                            portfolios[model].append(factor)
+                        if formation_labels is None:
+                            raise ValueError(f'{quote_year} 年的日度收益缺少对应六月分组')
+                        for model, factor in portfolio_returns(part, formation_labels).items():
+                            year_portfolios[model].append(factor)
                 for model in FACTORS:
-                    returns = pd.concat(portfolios[model])
-                    table = market.join(returns, validate='one_to_one').rename_axis('date').reset_index()
-                    yearly_factors[model].append(table)
+                    year_feature_factors = pd.concat(year_portfolios[model])
+                    year_factor_table = year_market.join(
+                        year_feature_factors, validate='one_to_one'
+                    ).rename_axis('date').reset_index()
+                    yearly_factors[model].append(year_factor_table)
             prior_labels = current_labels
 
         # 无请求交易日的历史年份也更新十二月行情和最近实际成交。
-        if not dec.empty:
-            previous_december = dec
-            last_december = last_actual_trades(last_december, daily, december_end)
+        if not december_quotes.empty:
+            previous_december = december_quotes
+            last_december_trades = last_actual_trades(last_december_trades, daily_quotes, december_end)
 
-    missing = pd.DatetimeIndex(requested).difference(seen)
+    missing = pd.DatetimeIndex(requested_trading_dates).difference(covered_trade_dates)
     if not missing.empty:
         raise ValueError(f'原始行情缺少 {len(missing)} 个交易日，首个为 {missing[0].date()}')
-    return {model: pd.concat(parts, ignore_index=True) for model, parts in yearly_factors.items()}
+    results = {}  # 正式因子表按模型存放，交易日升序。
+    for model, parts in yearly_factors.items():
+        formal_columns = ['date', 'rf', *factor_return_columns(model)]
+        combined_factors = pd.concat(parts, ignore_index=True)
+        results[model] = combined_factors.loc[:, formal_columns].sort_values('date', ignore_index=True)
+    return results
 
 
 def load_official(input_dir):
@@ -479,7 +524,7 @@ def load_official(input_dir):
         subset = data['MarkettypeID'].eq('P9714')
         if model == 5:
             subset &= data['Portfolios'].eq(1)
-        cols = [f'{factor}{i}' for factor in FACTORS[model] for i in WEIGHTS]
+        cols = factor_return_columns(model)
         result[model] = data.loc[subset, ['TradingDate', *cols]].rename(columns={'TradingDate': 'date'})
     return result
 
@@ -531,8 +576,7 @@ def save_daily_factors(results):
     created = []
     try:
         for model, path in OUTPUT_FILES.items():
-            columns = ['date', 'rf', *[f'{factor}{i}' for factor in FACTORS[model] for i in WEIGHTS]]
-            table = results[model].loc[:, columns].sort_values('date')
+            table = results[model]
             with path.open('x', encoding='utf-8-sig', newline='') as file:
                 created.append(path)
                 table.to_csv(file, index=False, date_format='%Y-%m-%d')

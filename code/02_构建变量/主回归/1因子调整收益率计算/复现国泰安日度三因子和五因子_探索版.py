@@ -51,8 +51,8 @@ MARKETS: Final[tuple[int, ...]] = (1, 4, 16, 32)  # 沪深主板、创业板和�
 MAIN_BOARD: Final[tuple[int, ...]] = (1, 4)
 CAP_COLUMNS: Final[tuple[str, ...]] = (
     'Dsmvosd', 'Dsmvtll', 'Dsmvtl2', 'Dsmvtl3',
-)
-WEIGHTS: Final[dict[int, str]] = {1: 'float_cap', 2: 'total_cap'}
+) # 流通市值 + 3个口径总市值 指标
+WEIGHTS: Final[dict[int, str]] = {1: 'float_cap', 2: 'total_cap'}# 选择使用流通市值或者总市值加权
 FACTOR_NAMES: Final[dict[str, str]] = {
     'RiskPremium': '市场风险溢价',
     'SMB': '规模',
@@ -174,6 +174,19 @@ def stock_rows(
     return table.loc[codes.isin(stock_code_candidates)]
 
 
+# 每项预览是一段说明和一张可选的小表。
+PreviewEntry = tuple[str, pd.DataFrame | None]
+
+
+def show_preview_entries(entries: Sequence[PreviewEntry]) -> None:
+    """显示已截取的样例，供查看单元重复运行。"""
+    with pd.option_context('display.unicode.east_asian_width', True):
+        for message, rows in entries:
+            print(message)
+            if rows is not None:
+                print(rows.to_string(index=rows.index.name is not None, na_rep='—'))
+
+
 def show_stage(
     title: str,
     *,
@@ -183,63 +196,53 @@ def show_stage(
     reasons: str,
     before_rows: pd.DataFrame | None = None,
     after_rows: pd.DataFrame | None = None,
+    preview_entries: list[PreviewEntry] | None = None,
+    stock_code: int | None = None,
 ) -> None:
-    """用完整阶段表的行列数和最多五行实际记录展示处理前后。"""
-    print(f'\n【{title}】')
-    print(f'合并键或筛选键：{keys}')
-    print(f'处理口径：{reasons}')
-    side: str
-    table: pd.DataFrame
-    preferred_rows: pd.DataFrame | None
-    with pd.option_context('display.unicode.east_asian_width', True):
-        for side, table, preferred_rows in (
-            ('处理前', before, before_rows),
-            ('处理后', after, after_rows),
-        ):
-            print(f'{side}：{table.shape[0]:,} 行 × {table.shape[1]:,} 列')
-            sample_rows: pd.DataFrame = (
-                table if preferred_rows is None else preferred_rows
-            ).head(PREVIEW_ROWS)
-            if not sample_rows.empty:
-                print(sample_rows.to_string(
-                    index=sample_rows.index.name is not None, na_rep='—'
-                ))
-            if preferred_rows is not None and len(sample_rows) < 3:
-                print(f'符合预览条件的记录共 {len(sample_rows)} 行。')
-                additional_rows: pd.DataFrame = table.head(
-                    PREVIEW_ROWS + len(sample_rows)
-                )
-                if (
-                    table.index.name is not None
-                    and table.index.name in sample_rows.columns
-                    and table.index.name not in table.columns
-                ):
-                    additional_rows = additional_rows.reset_index()
-                shared_columns: pd.Index = sample_rows.columns.intersection(
-                    additional_rows.columns
-                )
-                if not sample_rows.empty and len(shared_columns):
-                    rows_to_compare: pd.DataFrame = pd.concat([
-                        sample_rows.loc[:, shared_columns],
-                        additional_rows.loc[:, shared_columns],
+    """记录完整阶段的行列数，只保留最多五行样例供展示。"""
+    entries: list[PreviewEntry] = [(
+        f'\n【{title}】\n合并键或筛选键：{keys}\n处理口径：{reasons}', None,
+    )]
+    for side, table, preferred_rows in (
+        ('处理前', before, before_rows),
+        ('处理后', after, after_rows),
+    ):
+        sample_rows = (table if preferred_rows is None else preferred_rows).head(PREVIEW_ROWS)
+        caption = f'{side}：{table.shape[0]:,} 行 × {table.shape[1]:,} 列'
+        # 组合汇总后的行以交易日或组合为键，股票提示只用于个股表。
+        show_stock = stock_code is not None and (
+            'Stkcd' in table.columns or table.index.name == 'Stkcd'
+        )
+        if show_stock:
+            caption += f'\n股票 {stock_code:06d} 的样例'
+        if sample_rows.empty:
+            caption += '\n此侧无符合预览条件的记录。'
+        entries.append((caption, sample_rows.copy() if not sample_rows.empty else None))
+
+        if preferred_rows is not None and len(sample_rows) < 3:
+            additional_rows = table.head(PREVIEW_ROWS * 2)
+            if show_stock:
+                stock_index = stock_rows(additional_rows, stock_code).index
+                additional_rows = additional_rows.loc[~additional_rows.index.isin(stock_index)]
+            if table.index.name in sample_rows.columns and table.index.name not in table.columns:
+                additional_rows = additional_rows.reset_index()
+            shared_columns = sample_rows.columns.intersection(additional_rows.columns)
+            if len(shared_columns):
+                additional_rows = additional_rows.loc[:, shared_columns]
+                if not show_stock and not sample_rows.empty:
+                    samples = pd.concat([
+                        sample_rows.loc[:, shared_columns], additional_rows,
                     ], ignore_index=True)
-                    repeated_rows: pd.Series = rows_to_compare.duplicated()
-                    additional_rows = additional_rows.loc[
-                        ~repeated_rows.iloc[len(sample_rows):].to_numpy()
-                    ]
-                if len(shared_columns):
-                    additional_rows = additional_rows.loc[:, shared_columns]
-                additional_rows = additional_rows.head(
-                    PREVIEW_ROWS - len(sample_rows)
-                )
-                if not additional_rows.empty:
-                    print('补充样例（原表其他记录）')
-                    print(additional_rows.to_string(
-                        index=additional_rows.index.name is not None,
-                        na_rep='—',
-                    ))
-            elif sample_rows.empty:
-                print('此侧无可展示记录。')
+                    duplicates = samples.duplicated().iloc[len(sample_rows):].to_numpy()
+                    additional_rows = additional_rows.loc[~duplicates]
+            additional_rows = additional_rows.head(PREVIEW_ROWS - len(sample_rows))
+            if not additional_rows.empty:
+                entries.append(('补充样例（原表其他记录）', additional_rows.copy()))
+
+    if preview_entries is None:
+        show_preview_entries(entries)
+    else:
+        preview_entries.extend(entries)
 
 
 # %% 01. 整理交易日历并计算日度无风险利率
@@ -252,7 +255,7 @@ calendar_open: pd.Series = calendar_source['Statse'].eq('O')
 trading_dates: pd.Series = calendar_source.loc[
     calendar_market & calendar_open, 'Clddt'
 ].drop_duplicates().sort_values()
-trading_day_numbers: pd.Series = pd.Series(
+trading_day_numbers: pd.Series = pd.Series(  # 相邻开市日的序号相差 1。
     np.arange(len(trading_dates)), index=pd.DatetimeIndex(trading_dates)
 )
 month_ends: pd.Series = trading_dates.groupby(
@@ -312,7 +315,9 @@ eligible_rates: pd.DataFrame = rate_source.loc[
 matched_rates: pd.DataFrame = pd.merge_asof(
     requested_table, eligible_rates, left_on='date', right_on='ChangeDate'
 ).set_index('date')
-risk_free_rates: pd.Series = np.expm1(
+
+# 将年利率折算为日利率
+risk_free_rates: pd.Series = np.expm1(  # 年利率转小数，按 365 天复利折算。
     np.log1p(matched_rates['LumpFixed3Month'] / 100) / 365
 ).rename('rf')
 if risk_free_rates.isna().any():
@@ -393,6 +398,7 @@ income_items: dict[str, str] = {
     'B001209000': 'selling_expense',
     'B001210000': 'admin_expense',
 }
+
 financial_keys: list[str] = ['Stkcd', 'year']
 annual_tables: list[pd.DataFrame] = []
 trace_fiscal_year: int = trace_date.year - (2 if trace_date.month < 7 else 1)
@@ -469,7 +475,7 @@ annual_announcements['announced'] = pd.to_datetime(
 previous_assets: pd.DataFrame = annual_balance[
     [*financial_keys, 'assets']
 ].rename(columns={'assets': 'previous_assets'}).copy()
-previous_assets['year'] += 1
+previous_assets['year'] += 1  # 年份加一，使上年资产按本财年键匹配。
 merged_financials: pd.DataFrame = annual_balance.merge(
     previous_assets, on=financial_keys, how='left', validate='one_to_one'
 ).merge(
@@ -497,7 +503,7 @@ show_stage(
         )
     ].sort_values('year', ascending=False, kind='stable'),
 )
-
+# 账面权益中的递延税和优先股科目缺失按零处理。
 merged_financials['book'] = (
     merged_financials['equity'] + merged_financials['tax_liability'].fillna(0)
     - merged_financials['tax_asset'].fillna(0)
@@ -510,11 +516,11 @@ merged_financials['operating_profit'] = (
     - merged_financials['admin_expense'].fillna(0)
 )
 merged_financials['blank_financial_profit'] = (
-    merged_financials['has_income_statement'].eq(True)
+    merged_financials['has_income_statement'].eq(True)  # 区分缺利润表和科目全空。
     & merged_financials[list(income_items.values())].isna().all(axis=1)
     & merged_financials['book'].gt(0)
 )
-merged_financials['inv'] = (
+merged_financials['inv'] = (  # 两年总资产均为正时，计算资产同比增速。
     merged_financials['assets'].where(merged_financials['assets'].gt(0))
     .div(merged_financials['previous_assets'].where(
         merged_financials['previous_assets'].gt(0)
@@ -557,6 +563,8 @@ del (
 
 
 # %% 04. 整理股本变动、上市信息和行业分类
+
+# 读取并整理股本变动记录，在计算市值和账面市值比时，识别公司是否同时有 B 股或 H 股。
 share_paths: list[Path] = sorted(
     (input_dir / '专题研究系列-事件研究').glob('*/ER_Structure.csv')
 )
@@ -579,7 +587,7 @@ for share_date_column in ('date', 'DeclareDate'):
         shares[share_date_column], format='%Y-%m-%d', errors='coerce'
     )
 shares['has_b_shares'] = shares['TradableSharesB'].gt(0)
-shares['cross_listed'] = (
+shares['cross_listed'] = (  # 有 B 股或 H 股。
     shares['has_b_shares'] | shares['TradableSharesH'].gt(0)
 )
 shares = shares.dropna(subset=['date']).sort_values('date', kind='stable')
@@ -602,6 +610,8 @@ show_stage(
 )
 del share_source, share_before_rows, share_after_rows
 
+# 读取并整理上市公司行业分类，按各标准标记金融股。
+# 主要影响盈利因子的计算。
 industry_source: pd.DataFrame = pd.read_csv(
     input_path(input_dir, 'STK_INDUSTRYCLASS.csv'),
     usecols=[
@@ -667,6 +677,7 @@ del (
     industry_before_rows, industry_after_rows, financial_industry_prefix,
 )
 
+# 读取并整理上市公司上市日和发行价，按股票代码去重。
 company_source: pd.DataFrame = pd.read_csv(
     input_path(input_dir, 'TRD_Co.csv'),
     usecols=['Stkcd', 'Listdt', 'Ipoprc'],
@@ -689,18 +700,11 @@ del company_source
 
 
 # %% 05. 行情清理与六月换组
-def stock_first_rows(
+def stock_sample(
     table: pd.DataFrame, stock_code: int | None
 ) -> pd.DataFrame:
-    """优先展示指定股票，再用同一张表的其他实际记录补齐。"""
-    focus_rows: pd.DataFrame = stock_rows(table, stock_code).head(PREVIEW_ROWS)
-    if stock_code is None or len(focus_rows) >= PREVIEW_ROWS:
-        return focus_rows
-    candidate_rows: pd.DataFrame = table.head(PREVIEW_ROWS + len(focus_rows))
-    context_rows: pd.DataFrame = candidate_rows.loc[
-        ~candidate_rows.index.isin(focus_rows.index)
-    ].head(PREVIEW_ROWS - len(focus_rows))
-    return pd.concat([focus_rows, context_rows])
+    """只取指定股票的样例，未指定股票时取表头。"""
+    return stock_rows(table, stock_code).head(PREVIEW_ROWS)
 
 
 def nearby_date_rows(table: pd.DataFrame, date: pd.Timestamp) -> pd.DataFrame:
@@ -753,6 +757,7 @@ def read_daily_years(
     listed_companies: pd.DataFrame,
     preview_day: pd.Timestamp,
     stock_code: int | None,
+    preview_entries: list[PreviewEntry],
 ) -> Iterator[tuple[int, pd.DataFrame]]:
     """按下载分卷读取年度行情，保留停牌填充供权重和年末回填。"""
     quotes_directory: Path = (
@@ -842,16 +847,16 @@ def read_daily_years(
                         f'保留 1998 至 {last_year} 年及市场代码 {MARKETS}。'
                         '此处统计指定日已读取的实际记录。'
                     ),
-                    before_rows=stock_first_rows(original_quotes, stock_code),
-                    after_rows=stock_first_rows(
-                        eligible_day_quotes, stock_code
-                    ),
+                    before_rows=stock_sample(original_quotes, stock_code),
+                    after_rows=stock_sample(eligible_day_quotes, stock_code),
+                    preview_entries=preview_entries,
+                    stock_code=stock_code,
                 )
                 if stock_code is not None:
                     if stock_rows(original_quotes, stock_code).empty:
-                        print(f'  指定股票 {stock_code:06d} 无当天原始行情。')
+                        preview_entries.append((f'指定股票 {stock_code:06d} 无当天原始行情。', None))
                     elif stock_rows(eligible_day_quotes, stock_code).empty:
-                        print(f'  指定股票 {stock_code:06d} 当天未通过市场筛选。')
+                        preview_entries.append((f'指定股票 {stock_code:06d} 当天未通过市场筛选。', None))
 
             calendar_quotes: pd.DataFrame = year_quotes.rename(
                 columns={'Trddt': 'date'}
@@ -881,7 +886,7 @@ def read_daily_years(
             )
             daily_quotes['daily_float_cap'] = daily_quotes['Dsmvosd'] + (
                 daily_quotes['daily_total_cap'] - daily_quotes['Dsmvtll']
-            ).clip(lower=0)
+            ).clip(lower=0)  # 流通市值只加总市值相对基准的正差额。
             issue_price: pd.Series = daily_quotes['Stkcd'].map(
                 listed_companies['Ipoprc']
             )
@@ -890,7 +895,7 @@ def read_daily_years(
             ) & issue_price.gt(0)
             daily_quotes['offer_return'] = daily_quotes['Dretwd'].where(
                 ~listed_today, daily_quotes['Clsprc'].div(issue_price) - 1
-            )
+            )  # 上市当日发行价为正时，改用收盘价 ÷ 发行价 − 1。
             if is_preview_year:
                 cleaned_day_quotes: pd.DataFrame = daily_quotes.loc[
                     daily_quotes['date'].eq(preview_day)
@@ -907,10 +912,8 @@ def read_daily_years(
                         '排除非交易日并检查股票日唯一性，保留停牌填充；'
                         '按匹配的股本口径调整市值，上市首日有有效招股价时重算收益率。'
                     ),
-                    before_rows=stock_first_rows(
-                        eligible_day_quotes, stock_code
-                    ),
-                    after_rows=stock_first_rows(
+                    before_rows=stock_sample(eligible_day_quotes, stock_code),
+                    after_rows=stock_sample(
                         cleaned_day_quotes, stock_code
                     )[
                         [
@@ -920,6 +923,8 @@ def read_daily_years(
                             'offer_return',
                         ]
                     ],
+                    preview_entries=preview_entries,
+                    stock_code=stock_code,
                 )
             yield int(quote_year), daily_quotes
 
@@ -929,7 +934,7 @@ def last_actual_trades(
     daily_quotes: pd.DataFrame,
     cutoff_date: pd.Timestamp,
     *,
-    show_preview: bool,
+    preview_entries: list[PreviewEntry] | None,
     stock_code: int | None,
 ) -> pd.DataFrame:
     """为每只股票保留截至给定日期最近的实际成交。"""
@@ -947,7 +952,7 @@ def last_actual_trades(
         .drop_duplicates('Stkcd', keep='last')
         .set_index('Stkcd')
     )
-    if show_preview:
+    if preview_entries is not None:
         show_stage(
             f'截至 {cutoff_date.date()} 的最近实际成交',
             before=eligible_trades,
@@ -957,10 +962,10 @@ def last_actual_trades(
                 '合入以前年度保留的最近成交；本年只选截止日及之前的实际成交，'
                 '每只股票取最后一行，供年末停牌市值回填。'
             ),
-            before_rows=stock_first_rows(eligible_trades, stock_code),
-            after_rows=stock_first_rows(
-                latest_trades, stock_code
-            ).reset_index(),
+            before_rows=stock_sample(eligible_trades, stock_code),
+            after_rows=stock_sample(latest_trades, stock_code).reset_index(),
+            preview_entries=preview_entries,
+            stock_code=stock_code,
         )
     return latest_trades
 
@@ -976,7 +981,7 @@ def form_portfolios(
     december_end: pd.Timestamp,
     latest_december_trades: pd.DataFrame,
     *,
-    show_preview: bool,
+    preview_entries: list[PreviewEntry] | None,
     stock_code: int | None,
 ) -> pd.DataFrame:
     """计算六月规模组、年末特征组及两套固定六月权重。"""
@@ -986,9 +991,9 @@ def form_portfolios(
         .copy()
     )
     december_features: pd.DataFrame = december_quotes.set_index('Stkcd').copy()
-    june_members['float_cap'] = june_members['daily_float_cap']
+    june_members['float_cap'] = june_members['daily_float_cap']  # 换组期内固定使用六月市值。
     june_members['total_cap'] = june_members['daily_total_cap']
-
+    # 五因子可用截至换组日已披露的年末跨市场股本修正估值分母。
     december_features['value_cap3'] = december_features['daily_float_cap']
     year_end_date: pd.Timestamp = pd.Timestamp(june_end.year - 1, 12, 31)
     year_end_shares: pd.DataFrame = (
@@ -1006,12 +1011,12 @@ def form_portfolios(
     exact_float_cap: pd.Series = (
         tradable_shares.where(cross_listed & tradable_shares.gt(0))
         * december_features['Clsprc']
-        / 1000
+        / 1000  # 与日行情市值单位对齐。
     )
     december_features['value_cap5'] = exact_float_cap.fillna(
         december_features['daily_float_cap']
     )
-
+    # 年末为填充记录时，有值则用最近非填充行情的市值回填。
     actual_trades: pd.DataFrame = latest_december_trades.reindex(
         december_features.index
     )
@@ -1047,7 +1052,7 @@ def form_portfolios(
     june_members['size_group'] = np.where(
         june_members['float_cap'].ge(size_breakpoint), 'B', 'S'
     )
-    if show_preview:
+    if preview_entries is not None:
         show_stage(
             f'{june_end.date()} 六月规模排序及固定权重',
             before=june_quotes,
@@ -1057,18 +1062,26 @@ def form_portfolios(
                 f'六月流通市值须为正。主板流通市值中位数为 {size_breakpoint:g}，'
                 '达到中位数归大盘，其余归小盘。'
             ),
-            before_rows=stock_first_rows(june_quotes, stock_code)[
+            before_rows=stock_sample(june_quotes, stock_code)[
                 [
                     'Stkcd', 'date', 'Markettype',
                     'daily_float_cap', 'daily_total_cap',
                 ]
             ],
-            after_rows=stock_first_rows(
+            after_rows=stock_sample(
                 june_members, stock_code
             ).reset_index()[
                 ['Stkcd', 'date', 'float_cap', 'total_cap', 'size_group']
             ],
+            preview_entries=preview_entries,
+            stock_code=stock_code,
         )
+        if stock_code is not None and stock_rows(june_members, stock_code).empty:
+            reason = (
+                '六月末无行情' if stock_rows(june_quotes, stock_code).empty
+                else '六月末流通市值缺失或非正'
+            )
+            preview_entries.append((f'指定股票 {stock_code:06d} 未进入六月规模截面，{reason}。', None))
 
     # 六月断点是交易日。非交易日公告映射至下一交易日时，筛选结果相同。
     available_reports: pd.DataFrame = annual_reports.loc[
@@ -1084,7 +1097,7 @@ def form_portfolios(
         else available_reports['book'].gt(0)
     )
     profitability: pd.Series = available_reports['operating_profit'].div(
-        profit_equity
+        profit_equity  # 盈利能力 = 营业利润 ÷ 符合当期条件的账面权益。
     )
     if before_profit_change:
         available_reports['op'] = profitability.mask(is_financial)
@@ -1092,7 +1105,7 @@ def form_portfolios(
         available_reports['op'] = profitability.mask(
             is_financial & available_reports['blank_financial_profit'], 0
         )
-    if show_preview:
+    if preview_entries is not None:
         show_stage(
             f'{june_end.date()} 换组可用年报与盈利能力',
             before=annual_reports,
@@ -1102,9 +1115,17 @@ def form_portfolios(
                 '只取换组时已公开的上一财年年报。'
                 '采用当期适用的权益条件与金融股盈利规则。'
             ),
-            before_rows=stock_first_rows(annual_reports, stock_code),
-            after_rows=stock_first_rows(available_reports, stock_code),
+            before_rows=stock_sample(annual_reports, stock_code),
+            after_rows=stock_sample(available_reports, stock_code),
+            preview_entries=preview_entries,
+            stock_code=stock_code,
         )
+        if stock_code is not None and stock_rows(available_reports, stock_code).empty:
+            reason = (
+                '缺少上一财年记录' if stock_rows(annual_reports, stock_code).empty
+                else '公告日晚于换组日或缺失'
+            )
+            preview_entries.append((f'指定股票 {stock_code:06d} 无换组可用年报，{reason}。', None))
     december_features = december_features.join(
         available_reports.set_index('Stkcd')[['book', 'op', 'inv']],
         validate='one_to_one',
@@ -1118,9 +1139,9 @@ def form_portfolios(
             december_features['book'].gt(0)
         ).div(december_features[cap_column].where(
             december_features[cap_column].gt(0)
-        ) * 1000)
+        ) * 1000)  # 将市值换算到与账面权益相同的单位。
 
-    if show_preview:
+    if preview_entries is not None:
         show_stage(
             f'{december_end.date()} 年末市值与特征排序值',
             before=december_quotes,
@@ -1131,13 +1152,13 @@ def form_portfolios(
                 '年末停牌且有有效成交市值时回填。'
                 '账面权益及相应市值为正才计算账面市值比。'
             ),
-            before_rows=stock_first_rows(december_quotes, stock_code)[
+            before_rows=stock_sample(december_quotes, stock_code)[
                 [
                     'Stkcd', 'date', 'Filling', 'Clsprc',
                     'daily_float_cap', 'cross_listed',
                 ]
             ],
-            after_rows=stock_first_rows(
+            after_rows=stock_sample(
                 december_features, stock_code
             ).reset_index()[
                 [
@@ -1145,9 +1166,13 @@ def form_portfolios(
                     'bm3', 'bm5', 'op', 'inv',
                 ]
             ],
+            preview_entries=preview_entries,
+            stock_code=stock_code,
         )
 
     feature_columns: tuple[str, ...] = ('bm3', 'bm5', 'op', 'inv')
+    # 分组列保存低、中、高标签，原列保留排序数值。
+    feature_group_columns = [f'{name}_group' for name in feature_columns]
     for feature_name in feature_columns:
         feature_values: pd.Series = december_features[feature_name]
         lower_breakpoint: float
@@ -1155,7 +1180,7 @@ def form_portfolios(
         lower_breakpoint, upper_breakpoint = feature_values.loc[
             december_main_board
         ].quantile([0.30, 0.70])
-        december_features[feature_name] = pd.Series(
+        december_features[f'{feature_name}_group'] = pd.Series(
             np.select(
                 [
                     feature_values.ge(upper_breakpoint),
@@ -1167,18 +1192,18 @@ def form_portfolios(
             ),
             index=feature_values.index,
         ).replace('', np.nan)
-        if show_preview:
-            print(
+        if preview_entries is not None:
+            preview_entries.append((
                 f'  {feature_name} 的主板断点：'
-                f'30% = {lower_breakpoint:g}，70% = {upper_breakpoint:g}'
-            )
+                f'30% = {lower_breakpoint:g}，70% = {upper_breakpoint:g}', None,
+            ))
 
     june_weight_columns: list[str] = ['size_group', *WEIGHTS.values()]
     june_weights: pd.DataFrame = june_members[june_weight_columns]
     formation_labels: pd.DataFrame = june_weights.join(
-        december_features[list(feature_columns)], how='inner'
+        december_features[feature_group_columns], how='inner'
     ).reset_index()
-    if show_preview:
+    if preview_entries is not None:
         show_stage(
             f'{june_end.date()} 六月换组最终标签（指定交易日实际采用）',
             before=june_weights,
@@ -1188,16 +1213,19 @@ def form_portfolios(
                 '只保留两个截面都有的股票。按主板 30% 和 70% 断点分低、中、高组，'
                 '单项特征缺失时相应标签为空。'
             ),
-            before_rows=stock_first_rows(
-                june_weights, stock_code
-            ).reset_index(),
-            after_rows=stock_first_rows(formation_labels, stock_code),
+            before_rows=stock_sample(june_weights, stock_code).reset_index(),
+            after_rows=stock_sample(formation_labels, stock_code),
+            preview_entries=preview_entries,
+            stock_code=stock_code,
         )
         if (
             stock_code is not None
             and stock_rows(formation_labels, stock_code).empty
         ):
-            print(f'  指定股票 {stock_code:06d} 无本轮六月换组标签。')
+            preview_entries.append((
+                f'指定股票 {stock_code:06d} 无本轮六月换组标签，须同时出现在六月末和上年末截面。',
+                None,
+            ))
     return formation_labels
 
 
@@ -1218,7 +1246,7 @@ def weighted_mean_by_group(
     weighting_rows[weight_column] = pd.to_numeric(
         weighting_rows[weight_column], errors='coerce'
     )
-
+    # 收益缺失或市值权重缺失、非正时，该股票不进入分子和分母。
     valid_weights: pd.Series = (
         weighting_rows[return_column].notna()
         & weighting_rows[weight_column].notna()
@@ -1243,23 +1271,23 @@ def weighted_mean_by_group(
         )
         .reset_index()
     )
-    grouped_returns[result_column] = (
+    grouped_returns[result_column] = (  # 组收益 = Σ（个股收益 × 权重）÷ Σ权重。
         grouped_returns['sum_weighted_return'] / grouped_returns['sum_weight']
     )
     return grouped_returns.loc[:, result_columns], valid_weights
 
 
 def make_ff_2x3_factors(
-    group_returns: pd.DataFrame, feature_column: str
+    group_returns: pd.DataFrame, feature_name: str
 ) -> pd.DataFrame:
     """由六组收益计算小盘减大盘和高特征组减低特征组。"""
     wide_returns: pd.DataFrame = group_returns.pivot_table(
         index='date',
-        columns=['size_group', feature_column],
+        columns=['size_group', f'{feature_name}_group'],
         values='portfolio_return',
         aggfunc='first',
     )
-    required_groups: tuple[tuple[str, str], ...] = (
+    required_groups: tuple[tuple[str, str], ...] = (  # S/B 为小盘/大盘，L/M/H 为低/中/高。
         ('S', 'L'), ('S', 'M'), ('S', 'H'),
         ('B', 'L'), ('B', 'M'), ('B', 'H'),
     )
@@ -1269,13 +1297,13 @@ def make_ff_2x3_factors(
             wide_returns[group_key] = pd.NA
 
     daily_spreads: pd.DataFrame = pd.DataFrame(index=wide_returns.index)
-    daily_spreads[f'size_{feature_column}'] = (
+    daily_spreads[f'size_{feature_name}'] = (  # 小盘三组均值减大盘三组均值。
         (wide_returns[('S', 'L')] + wide_returns[('S', 'M')]
          + wide_returns[('S', 'H')]) / 3
         - (wide_returns[('B', 'L')] + wide_returns[('B', 'M')]
            + wide_returns[('B', 'H')]) / 3
     )
-    daily_spreads[feature_column] = (
+    daily_spreads[feature_name] = (  # 高特征组均值减低特征组均值。
         (wide_returns[('S', 'H')] + wide_returns[('B', 'H')]) / 2
         - (wide_returns[('S', 'L')] + wide_returns[('B', 'L')]) / 2
     )
@@ -1289,6 +1317,7 @@ def market_returns(
     risk_free_rates: pd.Series,
     preview_day: pd.Timestamp | None,
     stock_code: int | None,
+    preview_entries: list[PreviewEntry],
 ) -> pd.DataFrame:
     """按前一开市日市值加权市场收益，并计算市场风险溢价。"""
     market_columns: list[str] = [
@@ -1317,14 +1346,14 @@ def market_returns(
         market_quotes[weight_column] = current_cap.shift().where(
             previous_day_exists, current_cap
         )
-
+    # 先取得前一开市日权重，再排除当天的填充收益记录。
     eligible_market_quotes: pd.DataFrame = market_quotes.loc[
         market_quotes['Filling'].eq(0)
         & market_quotes['date'].isin(risk_free_rates.index)
     ]
     del market_quotes
     if preview_day is not None:
-        market_day_sample: pd.DataFrame = stock_first_rows(
+        market_day_sample: pd.DataFrame = stock_sample(
             eligible_market_quotes.loc[
                 eligible_market_quotes['date'].eq(preview_day)
             ],
@@ -1344,13 +1373,15 @@ def market_returns(
                 '先接上年十二月末行情并构造权重，再保留计算区间内的实际交易。'
                 '没有相邻记录用当日市值，前一开市日停牌填充市值仍可为权重。'
             ),
-            before_rows=stock_first_rows(
+            before_rows=stock_sample(
                 daily_quotes.loc[
                     daily_quotes['date'].eq(preview_day), market_columns
                 ],
                 stock_code,
             ),
             after_rows=market_day_sample,
+            preview_entries=preview_entries,
+            stock_code=stock_code,
         )
 
     daily_market: pd.DataFrame = risk_free_rates.to_frame()
@@ -1368,9 +1399,9 @@ def market_returns(
         ]
         daily_market[f'RiskPremium{weight_method}'] = (
             daily_market[market_column] - daily_market['rf']
-        )
+        )  # 市场风险溢价 = 市场收益 − 日无风险利率。
         if preview_day is not None:
-            weight_sample: pd.DataFrame = stock_first_rows(
+            weight_sample: pd.DataFrame = stock_sample(
                 eligible_market_quotes.loc[
                     eligible_market_quotes['date'].eq(preview_day),
                     ['Stkcd', 'date', 'offer_return', weight_column],
@@ -1390,6 +1421,8 @@ def market_returns(
                 ),
                 before_rows=weight_sample,
                 after_rows=nearby_date_rows(grouped_market, preview_day),
+                preview_entries=preview_entries,
+                stock_code=stock_code,
             )
     return daily_market
 
@@ -1399,9 +1432,10 @@ def portfolio_returns(
     formation_labels: pd.DataFrame,
     preview_day: pd.Timestamp | None,
     stock_code: int | None,
+    preview_entries: list[PreviewEntry],
 ) -> tuple[dict[int, pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame]]:
     """按六月市值加权六组收益，计算因子并截取实际计算表。"""
-    valid_quotes: pd.Series = (
+    valid_quotes: pd.Series = (  # 原始收益用于筛选，修正后收益用于加权。
         daily_quotes['Filling'].eq(0) & daily_quotes['Dretwd'].notna()
     )
     labeled_quotes: pd.DataFrame = daily_quotes.loc[valid_quotes].merge(
@@ -1410,10 +1444,11 @@ def portfolio_returns(
     exclude_profitability: pd.Series = (
         labeled_quotes['date'].lt(PROFIT_CHANGE) & labeled_quotes['financial']
     )
-    labeled_quotes.loc[exclude_profitability, 'op'] = np.nan
+    labeled_quotes.loc[exclude_profitability, 'op_group'] = np.nan
 
     formation_stock: pd.DataFrame = pd.DataFrame()
     observed_stock: pd.DataFrame = pd.DataFrame()
+    stock_exclusion = ''  # 指定股票未通过当日行情或换组标签筛选的原因。
     if preview_day is not None:
         source_day_quotes: pd.DataFrame = daily_quotes.loc[
             daily_quotes['date'].eq(preview_day)
@@ -1430,18 +1465,21 @@ def portfolio_returns(
                 '保留实际交易且原日收益率有值的行情，再保留能匹配六月标签的股票。'
                 '制度切换日前的金融股不参加盈利能力组合。'
             ),
-            before_rows=stock_first_rows(source_day_quotes, stock_code)[
+            before_rows=stock_sample(source_day_quotes, stock_code)[
                 [
                     'Stkcd', 'date', 'Filling', 'Dretwd',
                     'offer_return', 'financial',
                 ]
             ],
-            after_rows=stock_first_rows(labeled_day_quotes, stock_code)[
+            after_rows=stock_sample(labeled_day_quotes, stock_code)[
                 [
-                    'Stkcd', 'date', 'size_group', 'bm3', 'bm5', 'op', 'inv',
+                    'Stkcd', 'date', 'size_group',
+                    'bm3_group', 'bm5_group', 'op_group', 'inv_group',
                     'float_cap', 'total_cap', 'offer_return',
                 ]
             ],
+            preview_entries=preview_entries,
+            stock_code=stock_code,
         )
         if stock_code is not None:
             formation_stock = stock_rows(formation_labels, stock_code)
@@ -1451,14 +1489,18 @@ def portfolio_returns(
             )
             eligible_stock: pd.Series = valid_quotes.reindex(input_stock.index)
             if input_stock.empty:
-                print(f'  指定股票 {stock_code:06d} 当日无行情记录。')
+                stock_exclusion = '当日无行情'
             elif not eligible_stock.any():
-                print(
-                    f'  指定股票 {stock_code:06d} 当日因填充标识或原始收益缺失'
-                    '未进入组合计算。'
+                stock_exclusion = (
+                    '当日行情为填充记录' if not input_stock['Filling'].eq(0).any()
+                    else '原始日收益缺失'
                 )
             elif formation_stock.empty:
-                print(f'  指定股票 {stock_code:06d} 无本轮六月分组标签。')
+                stock_exclusion = '没有本轮六月换组标签'
+            if stock_exclusion:
+                preview_entries.append((
+                    f'指定股票 {stock_code:06d} 未进入日度特征组合，{stock_exclusion}。', None,
+                ))
 
     model_parts: dict[int, list[pd.DataFrame]] = {3: [], 5: []}
     group_previews: list[pd.DataFrame] = []
@@ -1471,61 +1513,47 @@ def portfolio_returns(
     weight_column: str
     for weight_method, weight_column in WEIGHTS.items():
         spread_parts: list[pd.DataFrame] = []
-        feature_column: str
-        for feature_column in ('bm3', 'bm5', 'op', 'inv'):
+        for feature_name in ('bm3', 'bm5', 'op', 'inv'):
+            group_column = f'{feature_name}_group'  # 本轮排序对应的分组标签列。
             feature_quotes: pd.DataFrame = labeled_quotes.loc[
-                labeled_quotes[feature_column].notna()
+                labeled_quotes[group_column].notna()
             ]
             group_returns: pd.DataFrame
             valid_weights: pd.Series
             group_returns, valid_weights = weighted_mean_by_group(
-                feature_quotes, ['date', 'size_group', feature_column],
+                feature_quotes, ['date', 'size_group', group_column],
                 'offer_return', weight_column, 'portfolio_return',
             )
             daily_spreads: pd.DataFrame = make_ff_2x3_factors(
-                group_returns, feature_column
+                group_returns, feature_name
             )
             spread_parts.append(daily_spreads)
             if preview_day is not None:
                 day_groups: pd.DataFrame = (
                     group_returns.loc[group_returns['date'].eq(preview_day)]
-                    .rename(columns={feature_column: 'feature_group'})
-                    .assign(weight_method=weight_method, signal=feature_column)
+                    .rename(columns={group_column: 'feature_group'})
+                    .assign(weight_method=weight_method, signal=feature_name)
                 )
                 group_previews.append(day_groups)
-                weight_labels: pd.DataFrame = labeled_day_quotes[
-                    [
-                        'Stkcd', 'date', 'size_group', feature_column,
-                        weight_column, 'offer_return',
-                    ]
-                ]
-                stock_weight_sample: pd.DataFrame = stock_first_rows(
-                    weight_labels, stock_code
-                ).copy()
-                stock_weight_sample['参与加权'] = valid_weights.reindex(
-                    stock_weight_sample.index, fill_value=False
-                )
-                preferred_group: pd.DataFrame = day_groups.iloc[:0]
                 if not stock_labels_for_day.empty:
-                    effective_feature: str | float = stock_labels_for_day[
-                        feature_column
-                    ].iat[0]
-                    if pd.notna(effective_feature):
-                        preferred_group = day_groups.loc[
-                            day_groups['size_group'].eq(
-                                stock_labels_for_day['size_group'].iat[0]
-                            )
-                            & day_groups['feature_group'].eq(effective_feature)
-                        ]
+                    group_label = stock_labels_for_day[group_column].iat[0]
+                    stock_size = stock_labels_for_day['size_group'].iat[0]
+                    stock_group_returns = day_groups.loc[
+                        day_groups['size_group'].eq(stock_size)
+                        & day_groups['feature_group'].eq(group_label)
+                    ]
                     stock_group: pd.DataFrame = (
-                        stock_labels_for_day[['size_group', feature_column]]
-                        .rename(columns={feature_column: 'feature_group'})
+                        stock_labels_for_day[['size_group', group_column]]
+                        .rename(columns={group_column: 'feature_group'})
                         .assign(
                             date=preview_day, weight_method=weight_method,
-                            signal=feature_column,
-                            formation_feature_group=formation_stock[
-                                feature_column
-                            ].iat[0],
+                            signal=feature_name,
+                            formation_feature_group=formation_stock[group_column].iat[0],
+                            stock_weight=stock_labels_for_day[weight_column].iat[0],
+                            stock_return=(
+                                np.nan if observed_stock.empty
+                                else observed_stock['offer_return'].iat[0]
+                            ),
                         )
                     )
                     measure: str
@@ -1533,49 +1561,26 @@ def portfolio_returns(
                         'portfolio_return', 'n_stocks', 'sum_weight'
                     ):
                         stock_group[measure] = (
-                            preferred_group[measure].iat[0]
-                            if not preferred_group.empty
+                            stock_group_returns[measure].iat[0]
+                            if not stock_group_returns.empty
                             else np.nan
                         )
-                    stock_group['included'] = bool(valid_weights.reindex(
+                    included = bool(valid_weights.reindex(
                         observed_stock.index, fill_value=False
                     ).any())
+                    reason = stock_exclusion  # 明细仅在未参与加权时记录原因。
+                    if not included and not reason:
+                        if feature_name == 'op' and exclude_profitability.loc[observed_stock.index].any():
+                            reason = '当日金融股不参加盈利能力组合'
+                        elif pd.isna(group_label):
+                            reason = '当日无该项分组标签'
+                        elif pd.isna(stock_group['stock_return'].iat[0]):
+                            reason = '加权用收益缺失'
+                        else:
+                            reason = '该口径六月市值权重缺失或非正'
+                    stock_group['included'] = included
+                    stock_group['exclusion_reason'] = reason
                     stock_group_previews.append(stock_group)
-
-                preview_groups: pd.DataFrame = pd.concat([
-                    preferred_group,
-                    day_groups.loc[
-                        ~day_groups.index.isin(preferred_group.index)
-                    ],
-                ]).rename(columns={'feature_group': feature_column})[
-                    group_returns.columns
-                ]
-                show_stage(
-                    f'{feature_column} 六组的加权收益（权重口径 {weight_method}）',
-                    before=labeled_quotes,
-                    after=group_returns,
-                    keys=f'date、size_group、{feature_column}',
-                    reasons=(
-                        '使用固定六月市值，排除缺失特征、缺失收益及缺失或非正权重；'
-                        '指定股票所在的有效组合优先展示。'
-                    ),
-                    before_rows=stock_weight_sample,
-                    after_rows=preview_groups,
-                )
-                show_stage(
-                    f'{feature_column} 六组收益差（权重口径 {weight_method}）',
-                    before=group_returns,
-                    after=daily_spreads,
-                    keys='date；将规模组和特征组转为同日六列后比较',
-                    reasons=(
-                        '小盘三组均值减大盘三组均值；高特征两组均值减低特征两组均值。'
-                        '所需组合收益缺失时，相应收益差保留缺失。'
-                    ),
-                    before_rows=preview_groups,
-                    after_rows=nearby_date_rows(
-                        daily_spreads.reset_index(), preview_day
-                    ),
-                )
 
         feature_spreads: pd.DataFrame = pd.concat(spread_parts, axis=1)
         three_factors: pd.DataFrame = pd.DataFrame({
@@ -1583,11 +1588,11 @@ def portfolio_returns(
         })
         five_factors: pd.DataFrame = pd.DataFrame({
             'SMB': feature_spreads[['size_bm5', 'size_op', 'size_inv']].mean(
-                axis=1, skipna=False
+                axis=1, skipna=False  # 三种排序的规模差都有效才取均值。
             ),
             'HML': feature_spreads['bm5'],
             'RMW': feature_spreads['op'],
-            'CMA': -feature_spreads['inv'],
+            'CMA': -feature_spreads['inv'],  # 投资因子为低投资减高投资。
         })
         model_parts[3].append(three_factors.add_suffix(str(weight_method)))
         model_parts[5].append(five_factors.add_suffix(str(weight_method)))
@@ -1611,6 +1616,7 @@ def portfolio_returns(
                 after_rows=nearby_date_rows(
                     display_model_factors, preview_day
                 ),
+                preview_entries=preview_entries,
             )
     model_results: dict[int, pd.DataFrame] = {}
     model_number: int
@@ -1633,16 +1639,21 @@ else:
 yearly_factors: dict[int, list[pd.DataFrame]] = {3: [], 5: []}
 prior_labels: pd.DataFrame | None = None
 previous_december: pd.DataFrame | None = None
-last_december_trades: pd.DataFrame | None = None
+last_december_trades: pd.DataFrame | None = None  # 每股截至上年末的最近非填充行情。
 covered_trade_dates: pd.DatetimeIndex = pd.DatetimeIndex([])
 group_preview_parts: list[pd.DataFrame] = []
 stock_group_preview_parts: list[pd.DataFrame] = []
+# 三组预览只保存指定日期、换组期和股票附近的少量样例。
+quote_previews: list[PreviewEntry] = []
+formation_previews: list[PreviewEntry] = []
+return_previews: list[PreviewEntry] = []
+market_preview_table = pd.DataFrame()  # 指定日附近的市场收益、无风险利率及风险溢价。
 
 quote_year: int
 daily_quotes: pd.DataFrame
 for quote_year, daily_quotes in read_daily_years(
     input_dir, sample_end.year, trading_day_numbers.index, shares, companies,
-    trace_date, trace_stock_code,
+    trace_date, trace_stock_code, quote_previews,
 ):
     december_end: pd.Timestamp = month_ends.get((quote_year, 12), pd.NaT)
     december_quotes: pd.DataFrame = daily_quotes.loc[
@@ -1676,7 +1687,9 @@ for quote_year, daily_quotes in read_daily_years(
                 industry, trading_day_numbers, june_end,
                 month_ends.at[(quote_year - 1, 12)],
                 last_december_trades,
-                show_preview=(quote_year == trace_formation_year),
+                preview_entries=(
+                    formation_previews if quote_year == trace_formation_year else None
+                ),
                 stock_code=trace_stock_code,
             )
 
@@ -1704,7 +1717,7 @@ for quote_year, daily_quotes in read_daily_years(
                 trace_date if quote_year == trace_date.year else None
             )
             if year_preview_day is not None:
-                selected_day_rows: pd.DataFrame = stock_first_rows(
+                selected_day_rows: pd.DataFrame = stock_sample(
                     selected_quotes.loc[
                         selected_quotes['date'].eq(trace_date)
                     ],
@@ -1722,16 +1735,23 @@ for quote_year, daily_quotes in read_daily_years(
                         '只交给当年请求的交易日。盈利规则变更前对实际交易匹配行业。'
                         '实际成交且原收益有值的观测用于检查日期覆盖。'
                     ),
-                    before_rows=stock_first_rows(
+                    before_rows=stock_sample(
                         daily_quotes.loc[daily_quotes['date'].eq(trace_date)],
                         trace_stock_code,
                     )[['Stkcd', 'date', 'Filling', 'Dretwd']],
                     after_rows=selected_day_rows,
+                    preview_entries=quote_previews,
+                    stock_code=trace_stock_code,
                 )
             year_market: pd.DataFrame = market_returns(
                 daily_quotes, previous_december, trading_day_numbers,
-                year_risk_free, year_preview_day, trace_stock_code,
+                year_risk_free, year_preview_day, trace_stock_code, return_previews,
             )
+            if year_preview_day is not None:
+                year_market_table = year_market.reset_index()
+                market_preview_table = nearby_date_rows(
+                    year_market_table, trace_date
+                ).copy()
             year_portfolios: dict[int, list[pd.DataFrame]] = {3: [], 5: []}
             # 当年上半年沿用上一轮标签，下半年使用当年六月标签。
             second_half: bool
@@ -1759,7 +1779,7 @@ for quote_year, daily_quotes in read_daily_years(
                     half_factors, half_group_preview, half_stock_preview
                 ) = portfolio_returns(
                     half_quotes, effective_labels,
-                    half_preview_day, trace_stock_code,
+                    half_preview_day, trace_stock_code, return_previews,
                 )
                 group_preview_parts.extend(half_group_preview)
                 stock_group_preview_parts.extend(half_stock_preview)
@@ -1778,7 +1798,6 @@ for quote_year, daily_quotes in read_daily_years(
                 ).rename_axis('date').reset_index()
                 yearly_factors[model_number].append(year_factor_table)
                 if year_preview_day is not None:
-                    year_market_table: pd.DataFrame = year_market.reset_index()
                     show_stage(
                         f'{quote_year} 年市场收益与{model_number}因子组合收益合并',
                         before=year_market_table,
@@ -1788,12 +1807,11 @@ for quote_year, daily_quotes in read_daily_years(
                             '保留市场侧请求交易日，特征因子对应日期或组合不足时'
                             '保留缺失。'
                         ),
-                        before_rows=nearby_date_rows(
-                            year_market_table, trace_date
-                        ),
+                        before_rows=market_preview_table,
                         after_rows=nearby_date_rows(
                             year_factor_table, trace_date
                         ),
+                        preview_entries=return_previews,
                     )
         prior_labels = current_labels
 
@@ -1802,9 +1820,23 @@ for quote_year, daily_quotes in read_daily_years(
         previous_december = december_quotes
         last_december_trades = last_actual_trades(
             last_december_trades, daily_quotes, december_end,
-            show_preview=(quote_year == trace_formation_year - 1),
+            preview_entries=(
+                formation_previews if quote_year == trace_formation_year - 1 else None
+            ),
             stock_code=trace_stock_code,
         )
+
+
+# %% 07a. 查看指定日行情清理前后
+show_preview_entries(quote_previews)
+
+
+# %% 07b. 查看年末市值、可用年报和六月换组标签
+show_preview_entries(formation_previews)
+
+
+# %% 07c. 查看市场权重、当日入组与因子合并
+show_preview_entries(return_previews)
 
 
 # %% 08. 检查日期覆盖并合并逐日因子
@@ -1830,9 +1862,13 @@ results: dict[int, pd.DataFrame] = {}
 result_model: int
 model_year_tables: list[pd.DataFrame]
 for result_model, model_year_tables in yearly_factors.items():
-    combined_factors: pd.DataFrame = pd.concat(
-        model_year_tables, ignore_index=True
-    )
+    formal_columns: list[str] = [
+        'date', 'rf', *factor_return_columns(result_model)
+    ]
+    # 正式结果与普通版同列同序，每个交易日一行。
+    combined_factors = pd.concat(
+        [table.loc[:, formal_columns] for table in model_year_tables], ignore_index=True
+    ).sort_values('date', ignore_index=True)
     results[result_model] = combined_factors
     trace_year_factors: pd.DataFrame = model_year_tables[0]
     annual_factors: pd.DataFrame
@@ -1841,9 +1877,6 @@ for result_model, model_year_tables in yearly_factors.items():
             trace_year_factors = annual_factors
             break
 
-    formal_columns: list[str] = [
-        'date', 'rf', *factor_return_columns(result_model)
-    ]
     result_model_name: str = TRACE_MODEL_NAMES[result_model]
     show_stage(
         f'{result_model_name}分年拼接',
@@ -1852,18 +1885,16 @@ for result_model, model_year_tables in yearly_factors.items():
         keys='交易日 date。分年表沿行拼接，逐年核对交易日覆盖。',
         reasons=(
             f'处理前展示追踪日所在的分年表。汇总 {len(model_year_tables)} 张'
-            f'分年表，样例显示正式口径的 {len(formal_columns)} 列。'
+            f'分年表，正式结果保留 {len(formal_columns)} 列并按交易日排序。'
         ),
         before_rows=nearby_date_rows(
             trace_year_factors.loc[:, formal_columns], trace_date
         ),
         after_rows=nearby_date_rows(
-            combined_factors.loc[:, formal_columns], trace_date
+            combined_factors, trace_date
         ),
     )
-    exact_factors: pd.DataFrame = combined_factors.loc[
-        combined_factors['date'].eq(trace_date), formal_columns
-    ]
+    exact_factors = combined_factors.loc[combined_factors['date'].eq(trace_date)]
     print(f'\n{trace_date.date()} 的最终{result_model_name}，收益为小数')
     print(exact_factors.to_string(index=False, na_rep='—'))
 
@@ -1894,6 +1925,9 @@ def label_group_preview(table: pd.DataFrame) -> pd.DataFrame:
             'sum_weight': '权重合计',
             'portfolio_return': '组合收益率（小数）',
             'included': '该股参与加权',
+            'stock_weight': '该股六月市值权重',
+            'stock_return': '该股收益率（小数）',
+            'exclusion_reason': '未参与原因',
         }
     )
 
@@ -1906,7 +1940,7 @@ if group_preview_parts:
     group_keys: list[str] = [
         'weight_method', 'signal', 'size_group', 'feature_group'
     ]
-    group_grid_keys: pd.MultiIndex = pd.MultiIndex.from_product(
+    group_grid_keys: pd.MultiIndex = pd.MultiIndex.from_product(  # 两种权重 × 四项特征 × 六组。
         [
             list(WEIGHTS), list(TRACE_FEATURE_NAMES),
             ['S', 'B'], ['L', 'M', 'H'],
@@ -1939,7 +1973,7 @@ if group_preview_parts:
 if trace_stock_code is not None:
     print(f'\n{trace_date.date()} 股票 {trace_stock_code:06d} 的对应组合')
     if stock_group_preview_parts:
-        print('当日无有效行情时，按六月标签列出对应组供对照。')
+        print('当日未进入组合时，可查看六月原分组和未参与原因。')
         exact_stock_groups: pd.DataFrame = pd.concat(
             stock_group_preview_parts, ignore_index=True
         )
@@ -1948,7 +1982,7 @@ if trace_stock_code is not None:
                 index=False, na_rep='—'
             ))
     else:
-        print('该股当日没有进入日行情与六月分组的合并结果。')
+        print('该股无组合明细，可在 07a 和 07c 单元查看当日筛选原因。')
 
 
 # %% 10. 按交易日及区间对照国泰安公布的日度因子
@@ -2007,7 +2041,7 @@ for comparison_model, daily_factor_table in results.items():
         matched_factors[f'{compared_column}_bps'] = (
             matched_factors[f'{compared_column}_calc']
             - matched_factors[f'{compared_column}_official']
-        ) * 10_000
+        ) * 10_000  # 复算减官方，收益小数转为基点。
     factor_comparison_tables[comparison_model] = matched_factors
 
     sample_factor: str = compared_columns[0]
